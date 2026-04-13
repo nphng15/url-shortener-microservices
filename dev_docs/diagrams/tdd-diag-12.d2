@@ -1,0 +1,395 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+
+direction: right
+
+title: "URL Service Module Architecture" {
+  near: top-center
+  shape: text
+  style: {
+    font-size: 20
+    bold: true
+  }
+}
+
+# ── Interfaces ────────────────────────────────────────────────────────────────
+URLRepository: {
+  shape: class
+  style.fill: "#E8D5FF"
+  style.stroke: "#7C3AED"
+  label: "URLRepository"
+  "«interface»": ""
+  "+Insert(ctx, rec *URLRecord)": "(*URLRecord, error)"
+  "+FindByCode(ctx, shortCode string)": "(*URLRecord, error)"
+  "+FindByUserID(ctx, userID, afterID string, limit int)": "([]*URLRecord, string, error)"
+  "+Deactivate(ctx, shortCode, userID string)": "error"
+}
+
+OutboxRepository: {
+  shape: class
+  style.fill: "#E8D5FF"
+  style.stroke: "#7C3AED"
+  label: "OutboxRepository"
+  "«interface»": ""
+  "+InsertWithURL(ctx, tx pgx.Tx, url *URLRecord, out *OutboxRecord)": "error"
+  "+InsertEvent(ctx, tx pgx.Tx, out *OutboxRecord)": "error"
+  "+FetchUnpublished(ctx, limit int)": "([]*OutboxRecord, error)"
+  "+MarkPublished(ctx, id string)": "error"
+}
+
+RedisCache: {
+  shape: class
+  style.fill: "#E8D5FF"
+  style.stroke: "#7C3AED"
+  label: "RedisCache"
+  "«interface»": ""
+  "+Get(ctx, shortCode string)": "(*CachedURL, bool)"
+  "+Set(ctx, shortCode string, cu *CachedURL, expiresAt *time.Time)": ""
+  "+Del(ctx, shortCode string)": ""
+}
+
+ShortCodeGenerator: {
+  shape: class
+  style.fill: "#E8D5FF"
+  style.stroke: "#7C3AED"
+  label: "ShortCodeGenerator"
+  "«interface»": ""
+  "+Generate()": "string"
+}
+
+RabbitMQPublisher: {
+  shape: class
+  style.fill: "#E8D5FF"
+  style.stroke: "#7C3AED"
+  label: "RabbitMQPublisher"
+  "«interface»": ""
+  "+Publish(ctx, routingKey string, body []byte)": "error"
+}
+
+# ── Concrete Implementations ──────────────────────────────────────────────────
+pgxURLRepository: {
+  shape: class
+  style.fill: "#DBEAFE"
+  style.stroke: "#1D4ED8"
+  label: "pgxURLStore"
+  "-pool": "*pgxpool.Pool"
+  "+Insert(ctx, rec *URLRecord)": "(*URLRecord, error)"
+  "+FindByCode(ctx, shortCode string)": "(*URLRecord, error)"
+  "+FindByUserID(ctx, userID, afterID string, limit int)": "([]*URLRecord, string, error)"
+  "+Deactivate(ctx, shortCode, userID string)": "error"
+}
+
+pgxOutboxRepository: {
+  shape: class
+  style.fill: "#DBEAFE"
+  style.stroke: "#1D4ED8"
+  label: "pgxOutboxStore"
+  "-pool": "*pgxpool.Pool"
+  "+InsertWithURL(ctx, tx pgx.Tx, url *URLRecord, out *OutboxRecord)": "error"
+  "+InsertEvent(ctx, tx pgx.Tx, out *OutboxRecord)": "error"
+  "+FetchUnpublished(ctx, limit int)": "([]*OutboxRecord, error)"
+  "+MarkPublished(ctx, id string)": "error"
+}
+
+redisCache: {
+  shape: class
+  style.fill: "#DBEAFE"
+  style.stroke: "#1D4ED8"
+  label: "redisCache"
+  "-client": "*redis.Client"
+  "-log": "*slog.Logger"
+  "+Get(ctx, shortCode string)": "(*CachedURL, bool)"
+  "+Set(ctx, shortCode string, cu *CachedURL, expiresAt *time.Time)": ""
+  "+Del(ctx, shortCode string)": ""
+}
+
+cryptoRandGenerator: {
+  shape: class
+  style.fill: "#DBEAFE"
+  style.stroke: "#1D4ED8"
+  label: "cryptoRandGenerator"
+  "+Generate()": "string"
+  "-uses: crypto/rand + big.Int mod 62^7": ""
+}
+
+amqpPublisher: {
+  shape: class
+  style.fill: "#DBEAFE"
+  style.stroke: "#1D4ED8"
+  label: "amqpPublisher"
+  "-ch": "*amqp.Channel"
+  "-exchangeName": "string"
+  "-mu": "sync.Mutex"
+  "-log": "*slog.Logger"
+  "+Publish(ctx, routingKey string, body []byte)": "error"
+}
+
+# ── Handler Layer ─────────────────────────────────────────────────────────────
+Handler: {
+  shape: class
+  style.fill: "#D1FAE5"
+  style.stroke: "#065F46"
+  label: "Handler"
+  "-store": "URLRepository"
+  "-outboxStore": "OutboxRepository"
+  "-cache": "RedisCache"
+  "-codegen": "ShortCodeGenerator"
+  "-pool": "*pgxpool.Pool"
+  "-cfg": "*Config"
+  "-log": "*slog.Logger"
+  "+Shorten(w http.ResponseWriter, r *http.Request)": ""
+  "+Redirect(w http.ResponseWriter, r *http.Request)": ""
+  "+ListURLs(w http.ResponseWriter, r *http.Request)": ""
+  "+DeleteURL(w http.ResponseWriter, r *http.Request)": ""
+}
+
+# ── Outbox Infrastructure ─────────────────────────────────────────────────────
+OutboxCoordinator: {
+  shape: class
+  style.fill: "#FEF3C7"
+  style.stroke: "#92400E"
+  label: "OutboxCoordinator"
+  "-store": "OutboxRepository"
+  "-workerCh": "chan *OutboxRecord (cap=50)"
+  "-wg": "sync.WaitGroup"
+  "-log": "*slog.Logger"
+  "-interval": "time.Duration"
+  "-workerCount": "int"
+  "+Run(ctx context.Context)": ""
+  "-poll(ctx, workerCh chan *OutboxRecord)": ""
+}
+
+OutboxWorker: {
+  shape: class
+  style.fill: "#FEF3C7"
+  style.stroke: "#92400E"
+  label: "OutboxWorker"
+  "(goroutine, no struct fields)": ""
+  "-publisher": "RabbitMQPublisher"
+  "-store": "OutboxRepository"
+  "-log": "*slog.Logger"
+  "+runWorker(ctx, workerCh <-chan *OutboxRecord)": ""
+}
+
+# ── Supporting Value Types ────────────────────────────────────────────────────
+URLRecord: {
+  shape: class
+  style.fill: "#F3F4F6"
+  style.stroke: "#6B7280"
+  label: "URLRecord"
+  "+ID": "string"
+  "+ShortCode": "string"
+  "+OriginalURL": "string"
+  "+UserID": "string"
+  "+CreatedAt": "time.Time"
+  "+ExpiresAt": "*time.Time"
+  "+IsActive": "bool"
+}
+
+OutboxRecord: {
+  shape: class
+  style.fill: "#F3F4F6"
+  style.stroke: "#6B7280"
+  label: "OutboxRecord"
+  "+ID": "string"
+  "+EventType": "string"
+  "+Payload": "[]byte"
+  "+CreatedAt": "time.Time"
+  "+PublishedAt": "*time.Time"
+}
+
+CachedURL: {
+  shape: class
+  style.fill: "#F3F4F6"
+  style.stroke: "#6B7280"
+  label: "CachedURL"
+  "+OriginalURL": "string"
+  "+ExpiresAt": "*time.Time"
+  "+IsActive": "bool"
+}
+
+# ── External Dependencies (annotations) ───────────────────────────────────────
+ext_pgx: "*pgxpool.Pool\n(shared across stores)" {
+  shape: rectangle
+  style.fill: "#FFF7ED"
+  style.stroke: "#C2410C"
+  style.stroke-dash: 4
+}
+
+ext_redis: "*redis.Client\n(go-redis/v9)" {
+  shape: rectangle
+  style.fill: "#FFF7ED"
+  style.stroke: "#C2410C"
+  style.stroke-dash: 4
+}
+
+ext_amqp: "*amqp.Channel\n(amqp091-go)" {
+  shape: rectangle
+  style.fill: "#FFF7ED"
+  style.stroke: "#C2410C"
+  style.stroke-dash: 4
+}
+
+# ── Interface Implementation Arrows (hollow triangle = implements) ─────────────
+pgxURLRepository -> URLRepository: {
+  style.stroke: "#7C3AED"
+  target-arrowhead: {
+    shape: triangle
+    style.filled: false
+  }
+  label: "implements"
+}
+
+pgxOutboxRepository -> OutboxRepository: {
+  style.stroke: "#7C3AED"
+  target-arrowhead: {
+    shape: triangle
+    style.filled: false
+  }
+  label: "implements"
+}
+
+redisCache -> RedisCache: {
+  style.stroke: "#7C3AED"
+  target-arrowhead: {
+    shape: triangle
+    style.filled: false
+  }
+  label: "implements"
+}
+
+cryptoRandGenerator -> ShortCodeGenerator: {
+  style.stroke: "#7C3AED"
+  target-arrowhead: {
+    shape: triangle
+    style.filled: false
+  }
+  label: "implements"
+}
+
+amqpPublisher -> RabbitMQPublisher: {
+  style.stroke: "#7C3AED"
+  target-arrowhead: {
+    shape: triangle
+    style.filled: false
+  }
+  label: "implements"
+}
+
+# ── Constructor Injection (solid arrows = owns/depends-on) ────────────────────
+Handler -> URLRepository: {
+  style.stroke: "#065F46"
+  label: "injected via\nNewHandler()"
+}
+
+Handler -> OutboxRepository: {
+  style.stroke: "#065F46"
+  label: "injected via\nNewHandler()"
+}
+
+Handler -> RedisCache: {
+  style.stroke: "#065F46"
+  label: "injected via\nNewHandler()"
+}
+
+Handler -> ShortCodeGenerator: {
+  style.stroke: "#065F46"
+  label: "injected via\nNewHandler()"
+}
+
+OutboxCoordinator -> OutboxRepository: {
+  style.stroke: "#92400E"
+  label: "injected via\nNewOutboxCoordinator()"
+}
+
+OutboxCoordinator -> RabbitMQPublisher: {
+  style.stroke: "#92400E"
+  label: "injected via\nNewOutboxCoordinator()"
+}
+
+OutboxCoordinator -> OutboxWorker: {
+  style.stroke: "#92400E"
+  style.stroke-dash: 3
+  label: "spawns\n3 goroutines"
+  target-arrowhead: {
+    shape: arrow
+  }
+}
+
+OutboxWorker -> RabbitMQPublisher: {
+  style.stroke: "#92400E"
+  label: "calls\nPublish()"
+}
+
+OutboxWorker -> OutboxRepository: {
+  style.stroke: "#92400E"
+  label: "calls\nMarkPublished()"
+}
+
+# ── External dependency wiring ────────────────────────────────────────────────
+ext_pgx -> pgxURLRepository: {
+  style.stroke: "#C2410C"
+  style.stroke-dash: 4
+  label: "pool"
+}
+
+ext_pgx -> pgxOutboxRepository: {
+  style.stroke: "#C2410C"
+  style.stroke-dash: 4
+  label: "pool"
+}
+
+ext_redis -> redisCache: {
+  style.stroke: "#C2410C"
+  style.stroke-dash: 4
+  label: "client"
+}
+
+ext_amqp -> amqpPublisher: {
+  style.stroke: "#C2410C"
+  style.stroke-dash: 4
+  label: "channel"
+}
+
+# ── Value type usage (dashed references) ──────────────────────────────────────
+URLRepository -> URLRecord: {
+  style.stroke-dash: 5
+  style.stroke: "#6B7280"
+  label: "produces/consumes"
+}
+
+OutboxRepository -> OutboxRecord: {
+  style.stroke-dash: 5
+  style.stroke: "#6B7280"
+  label: "produces/consumes"
+}
+
+RedisCache -> CachedURL: {
+  style.stroke-dash: 5
+  style.stroke: "#6B7280"
+  label: "produces/consumes"
+}
+
+# ── Legend ────────────────────────────────────────────────────────────────────
+legend: {
+  near: bottom-right
+  shape: rectangle
+  style.fill: "#F9FAFB"
+  style.stroke: "#D1D5DB"
+  label: |md
+    **Legend**
+    🟣 Purple border = Interface
+    🔵 Blue border = Implementation (concrete)
+    🟢 Green border = Handler layer
+    🟡 Yellow border = Outbox infrastructure
+    ⬜ Gray border = Value types
+    🟠 Orange dashed = External deps (pgx/redis/amqp)
+    ──► solid = constructor injection (owns)
+    - - ► dashed = reference / produces-consumes
+    △ hollow = implements interface
+  |
+}

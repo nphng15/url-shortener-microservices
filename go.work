@@ -1,0 +1,12 @@
+go 1.23
+
+use (
+	./gateway
+	./services/analytics-service
+	./services/notification-service
+	./services/url-service
+	./services/user-service
+	./shared/auth
+	./shared/events
+	./shared/logger
+)

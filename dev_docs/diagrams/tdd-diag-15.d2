@@ -1,0 +1,75 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+shape: sequence_diagram
+client: "HTTP Client\n(POST /shorten)"
+handler: "Shorten Handler\n(url-service)"
+pool: "pgxpool\n(url_db)"
+tx: "pgx.Tx"
+urls_table: "urls table"
+outbox_table: "outbox table"
+outbox_worker: "Outbox Worker\n(background)"
+rmq: "RabbitMQ\n(url-shortener exchange)"
+# ── Step 1: JWT + decode ──────────────────────────────────────────
+decode_group: "Step 1-4: Validate request, extract claims, parse expires_at, generate short_code" {
+  client -> handler: "POST /shorten\nAuthorization: Bearer <jwt>\nbody: {url, custom_code?, expires_at?}"
+  handler -> handler: "auth.ClaimsFromContext(r.Context())\n→ claims.Sub (userID), claims.Email"
+  handler -> handler: "validateURL(req.URL)\njson.NewDecoder(r.Body).Decode(&req)"
+  handler -> handler: "shortCode = codegen.Generate()\n[retry — attempt++ < maxRetries=5]"
+}
+# ── Step 5: Build event payload BEFORE opening tx ─────────────────
+pre_tx_group: "Step 5: Build URLCreatedEvent payload (before TX opens — marshal cannot fail inside TX)" {
+  handler -> handler: "evt := URLCreatedEvent{\n  EventID:       newUUID(),\n  CorrelationID: correlationIDFromContext(ctx),\n  ShortCode:     shortCode,\n  OriginalURL:   req.URL,\n  UserID:        claims.Sub,\n  UserEmail:     claims.Email,\n  ExpiresAt:     &t,\n}\npayload, _ = json.Marshal(evt)"
+}
+# ── Step 6a: Open transaction ─────────────────────────────────────
+tx_group: "Step 6: Single atomic transaction — BOTH rows or NEITHER" {
+  handler -> pool: "pool.Begin(ctx)"
+  pool -> tx: "BEGIN"
+  tx -> handler: "*pgx.Tx"
+  handler -> tx: 'INSERT INTO urls\n(short_code, original_url, user_id, expires_at)\nVALUES ($1,$2,$3,$4)\nRETURNING id, created_at, ...'
+  tx -> urls_table: "write url row"
+  unique_check: "Unique violation check" {
+    urls_table -> tx: "pg error 23505?\n(short_code conflict)"
+    tx -> handler: "ErrShortCodeConflict"
+    handler -> tx: "tx.Rollback(ctx)"
+    tx -> pool: "ROLLBACK"
+    handler -> handler: "shortCode = codegen.Generate()\n[retry — attempt++ < maxRetries=5]"
+    handler -> pool: "pool.Begin(ctx)  [retry loop]"
+    pool -> tx: "BEGIN"
+  }
+  handler -> tx: "INSERT INTO outbox\n(event_type='url.created', payload=<URLCreatedEvent JSON>)\nRETURNING id, created_at"
+  tx -> outbox_table: "write outbox row\n(published_at = NULL)"
+  outbox_table -> tx: "outbox row created"
+}
+# ── Commit or rollback ────────────────────────────────────────────
+commit_group: "Step 6 continued: COMMIT — both rows atomically visible or neither" {
+  handler -> tx: "tx.Commit(ctx)"
+  tx -> pool: "COMMIT"
+  pool -> handler: "nil error"
+  handler -> client: "201 Created\n{short_code, short_url, original_url, expires_at?}"
+}
+# ── Crash annotation ─────────────────────────────────────────────
+crash_annotation: "CRASH SCENARIOS (why single TX matters)" {
+  crash_before: "crash BEFORE COMMIT:\nBoth rows absent.\nNo orphan event.\nClient gets 502/timeout.\nClient retries → new short_code generated." {
+    handler -> handler
+  }
+  crash_after: "crash AFTER COMMIT:\nBoth rows present.\nOutbox poller finds published_at=NULL\n→ publishes URLCreatedEvent.\nAt-least-once delivery preserved." {
+    handler -> handler
+  }
+  two_tx_antipattern: "WHY TWO SEPARATE TXs WOULD BREAK at-least-once:\nTX1: INSERT urls → COMMIT ✓\n[crash here]\nTX2: INSERT outbox → NEVER RUNS\n→ URL created but no event ever published.\nConsumers never notified. Silent data loss." {
+    handler -> handler
+  }
+}
+# ── Background outbox poll (async, after commit) ──────────────────
+async_group: "Async: Outbox poller publishes the event (runs every 2s, independent of HTTP)" {
+  outbox_worker -> outbox_table: "SELECT id, event_type, payload\nFROM outbox\nWHERE published_at IS NULL\nORDER BY created_at ASC\nLIMIT 50\nFOR UPDATE SKIP LOCKED"
+  outbox_table -> outbox_worker: "[{id, 'url.created', <payload>}]"
+  outbox_worker -> rmq: "ch.PublishWithContext(\n  exchange='url-shortener',\n  routingKey='url.created',\n  DeliveryMode=Persistent,\n  body=payload\n)"
+  rmq -> outbox_worker: "publish ACK"
+  outbox_worker -> outbox_table: 'UPDATE outbox\nSET published_at = now()\nWHERE id = $1'
+  outbox_table -> outbox_worker: "1 row updated"
+  outbox_worker -> outbox_worker: "If MarkPublished fails:\n  published_at stays NULL\n  → re-fetched next poll\n  → re-published (at-least-once)\n  → consumer deduplicates by EventID"
+}

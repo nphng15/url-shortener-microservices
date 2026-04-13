@@ -1,0 +1,145 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+shape: sequence_diagram
+docker_hc: "Docker Healthcheck\n(pg_isready)"
+postgres: "PostgreSQL\n(url_db)"
+rabbitmq: "RabbitMQ\nBroker"
+redis: "Redis\nCache"
+app: "App Container\n(url-service)"
+os: "OS / Process"
+startup: "=== Container Startup Phase ===" {
+  docker_hc -> postgres: "pg_isready -U urluser -d urldb"
+  docker_hc <- postgres: "accepting connections"
+  docker_hc -> postgres: "pg_isready (retry every 5s)"
+  docker_hc <- postgres: "accepting connections ✓"
+}
+config_phase: "=== loadConfig() ===" {
+  app -> app: "os.Getenv(DATABASE_URL)\nos.Getenv(RABBITMQ_URL)\nos.Getenv(REDIS_URL)\nos.Getenv(JWT_SECRET)"
+  fatal_config: {
+    app -> os: "DATABASE_URL == \"\" ?" {
+      style.stroke: red
+      style.stroke-dash: 5
+    }
+    os <- app: "log.Error + os.Exit(1)\n[FATAL]" {
+      style.stroke: red
+    }
+  }
+  app -> app: "cfg populated ✓\nPort = \"8080\" (default)"
+}
+db_phase: "=== connectDB() — FATAL on fail ===" {
+  app -> postgres: "pgxpool.ParseConfig(DATABASE_URL)"
+  app <- postgres: "cfg parsed"
+  app -> postgres: "pgxpool.NewWithConfig(MaxConns=10, MinConns=2)"
+  app <- postgres: "pool created"
+  app -> postgres: "pool.Ping(ctx, timeout=10s)"
+  db_ok: {
+    app <- postgres: "PONG ✓"
+    app -> app: "log.Info(\"connected to DB\")"
+  }
+  db_fail: {
+    app -> os: "Ping timeout / refused ?" {
+      style.stroke: red
+      style.stroke-dash: 5
+    }
+    os <- app: "pool.Close()\nlog.Error(\"db unreachable\")\nos.Exit(1)  [FATAL]" {
+      style.stroke: red
+    }
+  }
+}
+redis_phase: "=== connectRedis() — NON-FATAL ===" {
+  app -> redis: "redis.ParseURL(REDIS_URL)"
+  app <- redis: "opts parsed"
+  app -> redis: "client.Ping(ctx, timeout=3s)"
+  redis_ok: {
+    app <- redis: "PONG ✓"
+    app -> app: "log.Info(\"connected to Redis\")\ncacheReady = true"
+  }
+  redis_fail: {
+    app -> app: "Ping fail / timeout ?" {
+      style.stroke: darkorange
+    }
+    app -> app: "log.Warn(\"redis unreachable,\ncache disabled\")  [NON-FATAL]\ncacheReady = false\n(client still returned)" {
+      style.stroke: darkorange
+    }
+  }
+}
+rmq_phase: "=== connectRabbitMQ() — retry-backoff, FATAL if exhausted ===" {
+  attempt1: {
+    app -> rabbitmq: "amqp.Dial(RABBITMQ_URL)  attempt=1"
+    app <- rabbitmq: "connection refused ✗" {
+      style.stroke: red
+    }
+    app -> app: "log.Warn(attempt=1, backoff=1s)"
+    app -> app: "time.Sleep(1s)"
+  }
+  attempt2: {
+    app -> rabbitmq: "amqp.Dial(RABBITMQ_URL)  attempt=2"
+    app <- rabbitmq: "connection refused ✗" {
+      style.stroke: red
+    }
+    app -> app: "log.Warn(attempt=2, backoff=2s)"
+    app -> app: "time.Sleep(2s)"
+  }
+  attempt_n: {
+    app -> rabbitmq: "amqp.Dial(RABBITMQ_URL)  attempt=N\n(backoff doubles: 1s→2s→4s…max 30s)"
+    app <- rabbitmq: "connection accepted ✓"
+    app -> rabbitmq: "conn.Channel()"
+    app <- rabbitmq: "channel opened ✓"
+  }
+  exhausted: {
+    app -> os: "N > maxAttempts=10 ?" {
+      style.stroke: red
+      style.stroke-dash: 5
+    }
+    os <- app: "log.Error(\"rabbitmq unreachable\")\nos.Exit(1)  [FATAL]" {
+      style.stroke: red
+    }
+  }
+}
+topology: "=== declareTopology() — FATAL on fail ===" {
+  app -> rabbitmq: "ch.ExchangeDeclare(\"url-shortener\",\n  type=topic, durable=true)"
+  app <- rabbitmq: "exchange declared ✓"
+  app -> rabbitmq: "ch.QueueDeclare(\"analytics.clicks\",\n  durable=true)  [analytics-svc]"
+  app <- rabbitmq: "queue declared ✓"
+  app -> rabbitmq: "ch.QueueBind(routing_key=\"url.clicked\")"
+  app <- rabbitmq: "binding created ✓"
+  app -> rabbitmq: "ch.QueueDeclare(\"notifications.events\",\n  durable=true)  [notification-svc]"
+  app <- rabbitmq: "queue declared ✓"
+  app -> rabbitmq: "ch.QueueBind(routing_key=\"url.created\")\nch.QueueBind(routing_key=\"url.deleted\")\nch.QueueBind(routing_key=\"milestone.reached\")"
+  app <- rabbitmq: "bindings created ✓"
+  topo_fail: {
+    app -> os: "ExchangeDeclare / QueueBind error ?" {
+      style.stroke: red
+      style.stroke-dash: 5
+    }
+    os <- app: "log.Error(\"declare failed\")\nos.Exit(1)  [FATAL]" {
+      style.stroke: red
+    }
+  }
+}
+routes: "=== registerRoutes() ===" {
+  app -> app: "mux.HandleFunc(\"GET /health\", healthHandler)\nmux.Handle(\"POST /shorten\", JWTMiddleware(shortenHandler))\nmux.Handle(\"GET /{code}\",  redirectHandler)\nmux.Handle(\"GET /urls\",   JWTMiddleware(listURLsHandler))\nmux.Handle(\"DELETE /urls/{code}\", JWTMiddleware(deleteHandler))"
+  app -> app: "coordinator := NewOutboxCoordinator(...)\ngo coordinator.Run(appCtx)"
+}
+http: "=== startHTTPServer() ===" {
+  app -> app: "srv := &http.Server{Addr: \":\" + cfg.Port}\ngo srv.ListenAndServe()"
+  app -> app: "log.Info(\"server listening\", \"port\", cfg.Port)"
+  app -> os: "signal.Notify(quit, SIGTERM, SIGINT)\n<-quit  [blocks until signal]"
+  os -> app: "SIGTERM received"
+  app -> app: "appCancel()  [stops outbox coordinator]\nsrv.Shutdown(ctx)\nmq.Close()\nredisClient.Close()\npool.Close()"
+  app -> os: "exit(0)"
+}
+legend: |md
+  **Failure Fatality**
+  - 🔴 RED = `os.Exit(1)` — process terminates
+  - 🟠 ORANGE = `log.Warn` + continue — degraded mode
+  - ✓ = success path continues
+  **RabbitMQ backoff schedule**
+  attempt 1→2: 1s · 2→3: 2s · 3→4: 4s … capped at 30s
+| {
+  near: bottom-center
+}

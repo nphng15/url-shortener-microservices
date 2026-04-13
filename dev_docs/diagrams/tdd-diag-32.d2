@@ -1,0 +1,151 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+
+direction: right
+style.fill: "#F8FAFC"
+
+title: |'md
+  ### X-Correlation-ID Propagation — Sync & Async Boundaries
+  **Goal:** Ensure a single `correlation_id` ("abc-123") is traceable across HTTP (Sync) and AMQP (Async) boundaries.
+'| {
+  near: top-center
+}
+
+# -----------------------------------------------------------------------------
+# ACTORS & ENTRY
+# -----------------------------------------------------------------------------
+client: "External Client\n(Browser / Mobile)" {
+  shape: person
+  style: {
+    stroke: "#4A90E2"
+    fill: "#E1F5FE"
+  }
+}
+
+# -----------------------------------------------------------------------------
+# SYNC PATH — HTTP SERVICES
+# -----------------------------------------------------------------------------
+sync_path: "── SYNC BOUNDARY (HTTP/1.1) ────────────────────────────────" {
+  style: {
+    stroke: "#6366F1"
+    fill: "#F5F7FF"
+    stroke-dash: 3
+  }
+
+  gateway: "API Gateway\n(Go / Echo)" {
+    style.fill: "#E0E7FF"
+    
+    gw_mw: "1. Middleware\n- Injects 'abc-123' if missing\n- Sets Request Context" {
+      style.fill: "#C7D2FE"
+    }
+    gw_log: "2. RequestLogger\n- Log msg: 'Incoming request'\n- Fields: {corr_id: 'abc-123'}" {
+      style.fill: "#C7D2FE"
+    }
+    gw_proxy: "3. Reverse Proxy\n- Set Header:\nX-Correlation-ID: abc-123" {
+      style.fill: "#C7D2FE"
+    }
+    
+    gw_mw -> gw_log -> gw_proxy
+  }
+
+  url_svc: "URL Service\n(Go / Gin)" {
+    style.fill: "#DCFCE7"
+
+    url_mw: "4. Auth/Corr Middleware\n- Extract 'abc-123'\n- Bind to Context" {
+      style.fill: "#BBF7D0"
+    }
+    url_biz: "5. Business Logic\n- Generate URLClickedEvent\n- Include 'abc-123' in Payload" {
+      style.fill: "#BBF7D0"
+    }
+    url_db: "6. Transactional Outbox\n- SQL: INSERT INTO outbox\n- JSON: {..., 'cid': 'abc-123'}" {
+      style.fill: "#BBF7D0"
+    }
+
+    url_mw -> url_biz -> url_db
+  }
+
+  gateway.gw_proxy -> url_svc.url_mw: "HTTP Header\nX-Correlation-ID: abc-123" {
+    style.stroke: "#4F46E5"
+    style.bold: true
+  }
+}
+
+client -> sync_path.gateway.gw_mw: "GET /r/9sKj\nHeader: X-Correlation-ID"
+
+# -----------------------------------------------------------------------------
+# ASYNC BOUNDARY — MESSAGE BROKER
+# -----------------------------------------------------------------------------
+async_boundary: "── ASYNC BOUNDARY (AMQP 0-9-1) ─────────────────────────" {
+  style: {
+    stroke: "#F97316"
+    fill: "#FFF7ED"
+    stroke-dash: 5
+  }
+
+  relay: "Outbox Relay\n(CDC / Polling)" {
+    style.fill: "#FFEDD5"
+    poll: "7. Relay Worker\n- Read JSON from DB\n- Set Message CorrelationId"
+  }
+
+  broker: "RabbitMQ Broker" {
+    shape: cylinder
+    style.fill: "#FED7AA"
+    exchange: "url.events (Topic)"
+  }
+
+  relay.poll -> broker.exchange: "Publish(payload, cid='abc-123')" {
+    style.stroke: "#EA580C"
+    style.animated: true
+  }
+}
+
+sync_path.url_svc.url_db -> async_boundary.relay.poll: "DB Row Write"
+
+# -----------------------------------------------------------------------------
+# ASYNC CONSUMERS
+# -----------------------------------------------------------------------------
+consumers: "── ASYNC CONSUMERS ──────────────────────────────────────────" {
+  style: {
+    stroke: "#16A34A"
+    fill: "#F0FDF4"
+    stroke-dash: 3
+  }
+
+  analytics: "Analytics Worker" {
+    style.fill: "#DCFCE7"
+    a_proc: "8. Message Handler\n- Unmarshal JSON\n- Log 'click' with 'abc-123'"
+  }
+
+  notifications: "Notification Worker" {
+    style.fill: "#DCFCE7"
+    n_proc: "9. Notification Handler\n- Trace 'abc-123' to user action"
+  }
+}
+
+async_boundary.broker.exchange -> consumers.analytics.a_proc: "Binding: url.clicked"
+async_boundary.broker.exchange -> consumers.notifications.n_proc: "Binding: url.created"
+
+# -----------------------------------------------------------------------------
+# LOG SUMMARY TABLE (FIXED BLOCK STRING)
+# -----------------------------------------------------------------------------
+log_summary: |'md
+  ### Unified Log View (Trace: abc-123)
+  
+  | Seq | Component | Action | Context Key | Log Message |
+  | :--- | :--- | :--- | :--- | :--- |
+  | 02 | **Gateway** | Middleware | `corr_id` | "Incoming request to /r/9sKj" |
+  | 05 | **URL Svc** | Handler | `cid` | "Processing shortcode lookup" |
+  | 08 | **Analytics** | Consumer | `correlation_id` | "Updating click counter" |
+  | 09 | **Notify** | Consumer | `request_id` | "Pushing webhook notification" |
+'| {
+  near: bottom-center
+  style: {
+    fill: "#FFFFFF"
+    stroke: "#94A3B8"
+    stroke-width: 1
+  }
+}

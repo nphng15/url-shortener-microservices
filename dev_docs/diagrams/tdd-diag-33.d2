@@ -1,0 +1,249 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+  }
+}
+title: |md
+  # Structured JSON Log Schema — shared/logger
+| {near: top-center}
+# ── Go Struct Definition ──────────────────────────────────────────────────────
+log_entry: "LogEntry (Go struct)" {
+  shape: class
+  style.fill: "#E8EAF6"
+  style.stroke: "#3949AB"
+  style.font-color: "#1A237E"
+  Level: "string  // \"debug\" | \"info\" | \"warn\" | \"error\""
+  Time: "time.Time  // RFC3339Nano — slog default"
+  Service: "string  // injected at logger.New(serviceName)"
+  CorrelationID: "string  // extracted from ctx via context.Value(correlationKey{})"
+  Msg: "string  // first positional arg to Info/Warn/Error"
+  Method: "string  // HTTP method — request logs only"
+  Path: "string  // URL path — request logs only"
+  Status: "int    // HTTP status code — request logs only"
+  DurationMS: "int64  // time.Since(start).Milliseconds() — request logs"
+  Error: "string  // omitempty — error logs only"
+}
+# ── Logger Interface ──────────────────────────────────────────────────────────
+logger_iface: "shared/logger.Logger" {
+  shape: class
+  style.fill: "#F3E5F5"
+  style.stroke: "#7B1FA2"
+  style.font-color: "#4A148C"
+  "+New(serviceName string)": "*slog.Logger"
+  "+WithCorrelationID(log, id string)": "*slog.Logger"
+  "+CorrelationIDFromContext(ctx)": "string"
+  "+ContextWithCorrelationID(ctx, id)": "context.Context"
+  "+RequestLogger(log *slog.Logger)": "func(http.Handler) http.Handler"
+}
+# ── Context Key ───────────────────────────────────────────────────────────────
+ctx_key: "correlationKey{}" {
+  shape: rectangle
+  style.fill: "#FFF9C4"
+  style.stroke: "#F9A825"
+  style.font-color: "#E65100"
+  label: |md
+    **unexported context key type**
+    `type correlationKey struct{}`
+    Prevents collisions with other packages.
+    Stored via `context.WithValue(ctx, correlationKey{}, id)`.
+    Retrieved via `ctx.Value(correlationKey{}).(string)`.
+  |
+}
+# ── Anti-Pattern Warning ──────────────────────────────────────────────────────
+no_println: "FORBIDDEN" {
+  shape: rectangle
+  style.fill: "#FFEBEE"
+  style.stroke: "#C62828"
+  style.font-color: "#B71C1C"
+  style.bold: true
+  label: |md
+    ❌ **NO `fmt.Println` in handlers**
+    ❌ **NO `fmt.Printf` in consumer loops**
+    ❌ **NO `log.Print` (stdlib log package)**
+    ✅ ALL output through `*slog.Logger`
+    ✅ Every log line is valid JSON on stdout
+    ✅ `correlation_id` propagated via context
+  |
+}
+# ── JSON Output Examples ──────────────────────────────────────────────────────
+examples: "JSON Output Examples" {
+  style.fill: "#F1F8E9"
+  style.stroke: "#558B2F"
+  req_log: "① Request Log (RequestLogger middleware)" {
+    shape: rectangle
+    style.fill: "#DCEDC8"
+    style.stroke: "#689F38"
+    style.font: mono
+    label: |md
+      json
+      {
+        "time":           "2026-03-02T12:00:00.123456789Z",
+        "level":          "INFO",
+        "service":        "url-service",
+        "correlation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "msg":            "request",
+        "method":         "GET",
+        "path":           "/abc1234",
+        "status":         301,
+        "duration_ms":    2
+      }
+      
+    |
+  }
+  err_log: "② Error Log (handler 500 path)" {
+    shape: rectangle
+    style.fill: "#FFCCBC"
+    style.stroke: "#BF360C"
+    style.font: mono
+    label: |md
+      json
+      {
+        "time":           "2026-03-02T12:00:01.000000000Z",
+        "level":          "ERROR",
+        "service":        "url-service",
+        "correlation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "msg":            "insert url+outbox",
+        "error":          "insert url in tx: ERROR: duplicate key value...",
+        "attempt":        2
+      }
+      
+    |
+  }
+  outbox_log: "③ Outbox Worker Log (background goroutine)" {
+    shape: rectangle
+    style.fill: "#B3E5FC"
+    style.stroke: "#0277BD"
+    style.font: mono
+    label: |md
+      json
+      {
+        "time":        "2026-03-02T12:00:05.000000000Z",
+        "level":       "WARN",
+        "service":     "url-service",
+        "msg":         "outbox publish failed",
+        "event_type":  "url.clicked",
+        "outbox_id":   "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "error":       "amqp publish url.clicked: Exception (504)..."
+      }
+      
+      *No correlation_id — outbox runs async, not bound to HTTP request context.*
+    |
+  }
+  consumer_log: "④ Consumer Processing Log (AMQP consumer)" {
+    shape: rectangle
+    style.fill: "#E1BEE7"
+    style.stroke: "#6A1B9A"
+    style.font: mono
+    label: |md
+      json
+      {
+        "time":           "2026-03-02T12:00:06.000000000Z",
+        "level":          "INFO",
+        "service":        "analytics-service",
+        "msg":            "click processed",
+        "event_id":       "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+        "short_code":     "abc1234",
+        "correlation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "duration_ms":    18
+      }
+      
+      *correlation_id carried through AMQP payload — crosses async boundary.*
+    |
+  }
+}
+# ── slog Handler Configuration ────────────────────────────────────────────────
+slog_config: "slog.Handler Configuration" {
+  shape: rectangle
+  style.fill: "#E0F7FA"
+  style.stroke: "#00838F"
+  style.font: mono
+  label: |md
+    go
+    // shared/logger/logger.go
+    func New(serviceName string) *slog.Logger {
+        h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+            Level: slog.LevelInfo,
+        })
+        // "service" field on EVERY log line — set once, inherited by all calls
+        return slog.New(h).With("service", serviceName)
+    }
+    // Per-request: bind correlation_id to logger for the request lifetime
+    func WithCorrelationID(log *slog.Logger, id string) *slog.Logger {
+        return log.With("correlation_id", id)
+    }
+    
+  |
+}
+# ── Correlation ID Extraction Flow ────────────────────────────────────────────
+corr_flow: "Correlation ID Flow" {
+  style.fill: "#FFF3E0"
+  style.stroke: "#E65100"
+  http_header: "HTTP Header\nX-Correlation-ID" {
+    shape: rectangle
+    style.fill: "#FFE0B2"
+    style.stroke: "#EF6C00"
+  }
+  corr_mw: "CorrelationIDMiddleware\n(gateway + each service)" {
+    shape: rectangle
+    style.fill: "#FFCC80"
+    style.stroke: "#EF6C00"
+  }
+  ctx_store: "context.WithValue\n(ctx, correlationKey{}, id)" {
+    shape: rectangle
+    style.fill: "#FFE082"
+    style.stroke: "#F9A825"
+  }
+  handler_extract: "CorrelationIDFromContext(ctx)\n→ logger.With(\"correlation_id\", id)" {
+    shape: rectangle
+    style.fill: "#FFF9C4"
+    style.stroke: "#F9A825"
+  }
+  amqp_payload: "AMQP Event Payload\nBaseEvent.CorrelationID" {
+    shape: rectangle
+    style.fill: "#FFCCBC"
+    style.stroke: "#BF360C"
+  }
+  http_header -> corr_mw: "read or generate UUID"
+  corr_mw -> ctx_store: "inject into context"
+  ctx_store -> handler_extract: "ctx passed to all handlers"
+  handler_extract -> amqp_payload: "copied to outbox event struct\nbefore tx.Commit()"
+}
+# ── Connections ───────────────────────────────────────────────────────────────
+logger_iface -> log_entry: "produces" {
+  style.stroke: "#7B1FA2"
+  style.stroke-dash: 3
+}
+logger_iface -> ctx_key: "reads via\nCorrelationIDFromContext" {
+  style.stroke: "#7B1FA2"
+  style.stroke-dash: 5
+}
+slog_config -> logger_iface: "implements" {
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  style.stroke: "#00838F"
+}
+log_entry -> examples.req_log: "request\nlog shape" {
+  style.stroke: "#558B2F"
+  style.stroke-dash: 3
+}
+log_entry -> examples.err_log: "error\nlog shape" {
+  style.stroke: "#BF360C"
+  style.stroke-dash: 3
+}
+log_entry -> examples.outbox_log: "worker\nlog shape" {
+  style.stroke: "#0277BD"
+  style.stroke-dash: 3
+}
+log_entry -> examples.consumer_log: "consumer\nlog shape" {
+  style.stroke: "#6A1B9A"
+  style.stroke-dash: 3
+}
+corr_flow.http_header -> ctx_key: "value stored\nunder this key" {
+  style.stroke: "#F9A825"
+  style.stroke-dash: 5
+}
+no_println -> logger_iface: "replace with" {
+  style.stroke: "#C62828"
+  style.animated: true
+}

@@ -1,0 +1,241 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+direction: right
+
+title: |md
+  ## POST /login — Timing-Safe Email Enumeration Prevention
+  Both failure paths call bcrypt.CompareHashAndPassword to equalize response time
+| {near: top-center}
+
+# ── STEP 1: Input ─────────────────────────────────────────────────────────────
+step1: "Step 1: Decode Request Body" {
+  style.fill: "#E8F4FD"
+  style.stroke: "#2980B9"
+  style.border-radius: 8
+  body: |md
+    **POST /login**
+    json
+    {
+      "email": "user@example.com",
+      "password": "plaintextPass"
+    }
+    
+  | {style.fill: "#D6EAF8"; style.stroke: "#2980B9"}
+  validate: "json.Decode(r.Body)\n→ req.Email, req.Password" {
+    style.fill: "#AED6F1"
+    style.stroke: "#2980B9"
+    style.border-radius: 4
+  }
+  body -> validate: "decode"
+}
+
+# ── STEP 2: DB Lookup ─────────────────────────────────────────────────────────
+step2: "Step 2: FindByEmail(req.Email)" {
+  style.fill: "#EAF4FB"
+  style.stroke: "#1A5276"
+  style.border-radius: 8
+  query: 'SELECT id, email, password_hash\nFROM users WHERE email = $1' {
+    style.fill: "#AED6F1"
+    style.stroke: "#1A5276"
+    style.font: mono
+    style.border-radius: 4
+  }
+  found: "row returned" {
+    style.fill: "#A9DFBF"
+    style.stroke: "#1E8449"
+    style.border-radius: 4
+  }
+  notfound: "pgx.ErrNoRows\n→ ErrUserNotFound" {
+    style.fill: "#FADBD8"
+    style.stroke: "#C0392B"
+    style.border-radius: 4
+  }
+  query -> found: "hit"
+  query -> notfound: "miss"
+}
+
+# ── STEP 3A: User NOT Found — Dummy Compare ───────────────────────────────────
+step3a: "Step 3A: User NOT Found — Timing Equalization" {
+  style.fill: "#FDF2E9"
+  style.stroke: "#E67E22"
+  style.border-radius: 8
+  dummy: 'dummyHash :=\n"$2a$12$0000...GhG"\n(invalid bcrypt hash — always fails)' {
+    style.fill: "#FAD7A0"
+    style.stroke: "#E67E22"
+    style.font: mono
+    style.border-radius: 4
+  }
+  compare_dummy: "bcrypt.CompareHashAndPassword(\n  []byte(dummyHash),\n  []byte(req.Password),\n)" {
+    style.fill: "#F0B27A"
+    style.stroke: "#E67E22"
+    style.font: mono
+    style.border-radius: 4
+  }
+  discard: "result intentionally\ndiscarded — always mismatch\n(~250–350ms CPU)" {
+    style.fill: "#FDEBD0"
+    style.stroke: "#E67E22"
+    style.border-radius: 4
+    style.italic: true
+  }
+  why: |md
+    **WHY:** Without this, timing difference between
+    "email not found" (~0ms) vs "wrong password" (~300ms)
+    reveals email existence to an attacker.
+    Dummy compare keeps both paths at ≈300ms.
+  | {style.fill: "#FEF9E7"; style.stroke: "#F39C12"}
+  dummy -> compare_dummy: "constant-time\nprobe"
+  compare_dummy -> discard: "ErrMismatchedHashAndPassword\n(expected)"
+}
+
+# ── STEP 3B: User Found — Real Compare ───────────────────────────────────────
+step3b: "Step 3B: User Found — Real bcrypt Compare" {
+  style.fill: "#EAFAF1"
+  style.stroke: "#1E8449"
+  style.border-radius: 8
+  stored: "user.PasswordHash\n(60-char bcrypt string\nfrom users table)" {
+    style.fill: "#A9DFBF"
+    style.stroke: "#1E8449"
+    style.font: mono
+    style.border-radius: 4
+  }
+  compare_real: "bcrypt.CompareHashAndPassword(\n  []byte(user.PasswordHash),\n  []byte(req.Password),\n)" {
+    style.fill: "#58D68D"
+    style.stroke: "#1E8449"
+    style.font: mono
+    style.border-radius: 4
+  }
+  match: "nil — passwords match\n(~250–350ms)" {
+    style.fill: "#A9DFBF"
+    style.stroke: "#1E8449"
+    style.border-radius: 4
+  }
+  mismatch: "ErrMismatchedHashAndPassword\n(~250–350ms)" {
+    style.fill: "#FADBD8"
+    style.stroke: "#C0392B"
+    style.border-radius: 4
+  }
+  stored -> compare_real: "compare"
+  compare_real -> match: "correct password"
+  compare_real -> mismatch: "wrong password"
+}
+
+# ── STEP 4: Token Issuance ────────────────────────────────────────────────────
+step4: "Step 4: TokenIssuer.Issue(userID, email)" {
+  style.fill: "#F4ECF7"
+  style.stroke: "#7D3C98"
+  style.border-radius: 8
+  claims_build: "Build jwt.MapClaims {\n  sub:   user.ID  (UUID v4)\n  email: user.Email\n  iss:   \"url-shortener\"\n  iat:   time.Now().Unix()\n  exp:   iat + ttl (24h)\n}" {
+    style.fill: "#D7BDE2"
+    style.stroke: "#7D3C98"
+    style.font: mono
+    style.border-radius: 4
+  }
+  sign: "jwt.NewWithClaims(HS256, claims)\n  .SignedString([]byte(secret))\n→ \"<header>.<payload>.<sig>\"" {
+    style.fill: "#BB8FCE"
+    style.stroke: "#7D3C98"
+    style.font: mono
+    style.border-radius: 4
+  }
+  expiry: "expiresAt :=\ntime.Unix(exp, 0).UTC()" {
+    style.fill: "#D7BDE2"
+    style.stroke: "#7D3C98"
+    style.font: mono
+    style.border-radius: 4
+  }
+  claims_build -> sign: "HMAC-SHA256\nsign"
+  sign -> expiry: "derive\nexpiry time"
+}
+
+# ── STEP 5A: 401 Response (both failure paths) ────────────────────────────────
+step5a: "Step 5A: 401 Unauthorized (BOTH failure paths)" {
+  style.fill: "#FDEDEC"
+  style.stroke: "#C0392B"
+  style.border-radius: 8
+  resp_401: |md
+    **HTTP 401**
+    json
+    { "error": "invalid credentials" }
+    
+  | {style.fill: "#FADBD8"; style.stroke: "#C0392B"}
+  timing_note: "IDENTICAL response body\nfor BOTH paths:\n• email not found\n• wrong password\n\nPrevents email enumeration\nvia response body comparison." {
+    style.fill: "#FDFEFE"
+    style.stroke: "#C0392B"
+    style.border-radius: 4
+    style.italic: true
+  }
+  resp_401 -> timing_note: "security\ninvariant"
+}
+
+# ── STEP 5B: 200 Response ─────────────────────────────────────────────────────
+step5b: "Step 5B: 200 OK — Token Issued" {
+  style.fill: "#EAFAF1"
+  style.stroke: "#1E8449"
+  style.border-radius: 8
+  resp_200: |md
+    **HTTP 200**
+    json
+    {
+      "token": "eyJhbGci...",
+      "expires_at": "2026-03-03T12:00:00Z"
+    }
+    
+  | {style.fill: "#A9DFBF"; style.stroke: "#1E8449"}
+}
+
+# ── TIMING COMPARISON (annotation) ────────────────────────────────────────────
+timing_legend: "Timing Profile Comparison" {
+  near: bottom-center
+  style.fill: "#FDFEFE"
+  style.stroke: "#626567"
+  style.border-radius: 6
+  t_notfound: "email not found path:\n  FindByEmail()       ~1–3ms\n  dummy bcrypt compare ~300ms  ← equalized\n  return 401           ~0ms\n  TOTAL:              ~301–303ms" {
+    style.fill: "#FEF9E7"
+    style.stroke: "#F39C12"
+    style.font: mono
+    style.border-radius: 4
+  }
+  t_wrongpass: "wrong password path:\n  FindByEmail()        ~1–3ms\n  real bcrypt compare  ~300ms  ← same cost\n  return 401            ~0ms\n  TOTAL:               ~301–303ms" {
+    style.fill: "#FEF9E7"
+    style.stroke: "#E67E22"
+    style.font: mono
+    style.border-radius: 4
+  }
+  t_success: "correct password path:\n  FindByEmail()        ~1–3ms\n  real bcrypt compare  ~300ms\n  jwt.Sign()            ~0.1ms\n  return 200            ~0ms\n  TOTAL:               ~301–303ms" {
+    style.fill: "#EAFAF1"
+    style.stroke: "#1E8449"
+    style.font: mono
+    style.border-radius: 4
+  }
+  t_notfound -> t_wrongpass: "≈ same\nwall time"
+  t_wrongpass -> t_success: "≈ same\nwall time"
+}
+
+# ── CONNECTIONS ───────────────────────────────────────────────────────────────
+step1.validate -> step2.query: "email string"
+step2.notfound -> step3a.dummy: "ErrUserNotFound\n→ do NOT return yet" {
+  style.stroke: "#E67E22"
+  style.stroke-dash: 4
+}
+step2.found -> step3b.stored: "user.PasswordHash\nloaded from row" {
+  style.stroke: "#1E8449"
+}
+step3a.discard -> step5a.resp_401: "always 401\n(email unknown)" {
+  style.stroke: "#C0392B"
+  style.stroke-width: 2
+}
+step3b.mismatch -> step5a.resp_401: "always 401\n(wrong password)" {
+  style.stroke: "#C0392B"
+  style.stroke-width: 2
+}
+step3b.match -> step4.claims_build: "proceed to\ntoken issuance" {
+  style.stroke: "#1E8449"
+  style.stroke-width: 2
+}
+step4.expiry -> step5b.resp_200: "tokenString +\nexpiresAt" {
+  style.stroke: "#7D3C98"
+  style.stroke-width: 2
+}

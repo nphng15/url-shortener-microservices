@@ -1,0 +1,112 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 6
+  }
+}
+shape: sequence_diagram
+Client
+Gateway_CB: "Gateway\n(CircuitBreaker)"
+Mutex: "sync.Mutex"
+Upstream: "url-service\n(upstream)"
+scenario_1: "SCENARIO 1 — Trip → Open → Half-Open → Closed (Probe Success)" {
+  phase_closed: "── PHASE: CLOSED (state=CLOSED, failures=0) ──" {
+    Client -> Gateway_CB: "GET /r/abc1234 [req #1]"
+    Gateway_CB -> Mutex: "mu.Lock()\nstate=CLOSED, reset window if expired\nmu.Unlock()"
+    Gateway_CB -> Upstream: "proxy.ServeHTTP(rw, r)"
+    Upstream -> Gateway_CB: "HTTP 500" {
+      style.stroke: red
+    }
+    Gateway_CB -> Mutex: "mu.Lock()\nlastFailureTime=now()\nfailures++ → 1\n1 < maxFailures(5): stay CLOSED\nmu.Unlock()"
+    Gateway_CB -> Client: "502 Bad Gateway"
+  }
+  req2_4: "── requests #2, #3, #4 — same pattern, failures → 2, 3, 4 ──" {
+    Client -> Gateway_CB: "GET /r/abc1234 [req #2…#4]"
+    Gateway_CB -> Upstream: "proxy → HTTP 500 each time" {
+      style.stroke: red
+    }
+    Gateway_CB -> Mutex: "mu.Lock()\nfailures++ → 2 / 3 / 4\nmu.Unlock()"
+    Gateway_CB -> Client: "502 (proxied)"
+  }
+  trip: "── request #5 — TRIPS THE BREAKER ──" {
+    Client -> Gateway_CB: "GET /r/abc1234 [req #5]"
+    Gateway_CB -> Mutex: "mu.Lock()\nstate=CLOSED\nmu.Unlock()"
+    Gateway_CB -> Upstream: "proxy → HTTP 500" {
+      style.stroke: red
+    }
+    Gateway_CB -> Mutex: "mu.Lock()\nfailures++ → 5\n5 >= maxFailures(5)\nstate ← OPEN\nwindowStart = now()\nlog WARN 'circuit breaker OPEN'\nmu.Unlock()" {
+      style.stroke: red
+      style.font-color: red
+    }
+    Gateway_CB -> Client: "502 (proxied)"
+  }
+  open_phase: "── PHASE: OPEN (t=0s…30s) — 10 requests rejected instantly ──" {
+    Client -> Gateway_CB: "GET /r/abc1234 [req #6]"
+    Gateway_CB -> Mutex: "mu.Lock()\nstate=OPEN\ntime.Since(lastFailureTime) < openTimeout(30s)\nmu.Unlock()" {
+      style.stroke: red
+    }
+    Gateway_CB -> Client: "503 {\"error\":\"service unavailable\"}\n[NO upstream call — < 1ms]" {
+      style.stroke: red
+      style.bold: true
+    }
+    Client -> Gateway_CB: "GET /r/abc1234 [req #7…#15]"
+    Gateway_CB -> Mutex: "mu.Lock() → OPEN, timeout not elapsed → mu.Unlock()" {
+      style.stroke: red
+    }
+    Gateway_CB -> Client: "503 ×10 — all rejected without touching upstream" {
+      style.stroke: red
+    }
+  }
+  halfopen: "── t=30s elapsed → HALF_OPEN probe ──" {
+    Client -> Gateway_CB: "GET /r/abc1234 [req #16 — probe]"
+    Gateway_CB -> Mutex: "mu.Lock()\nstate=OPEN\ntime.Since(lastFailureTime) >= openTimeout(30s)\nstate ← HALF_OPEN\nlog INFO 'probing upstream'\nmu.Unlock()" {
+      style.stroke: "#f4a261"
+    }
+    Gateway_CB -> Upstream: "proxy.ServeHTTP(rw, r)  ← PROBE REQUEST"
+    Upstream -> Gateway_CB: "HTTP 200 OK" {
+      style.stroke: green
+    }
+    Gateway_CB -> Mutex: "mu.Lock()\nstate=HALF_OPEN + success\nstate ← CLOSED\nfailures = 0\nlog INFO 'circuit breaker CLOSED (probe succeeded)'\nmu.Unlock()" {
+      style.stroke: green
+      style.font-color: green
+    }
+    Gateway_CB -> Client: "301 Moved Permanently (proxied)"
+  }
+  closed_resume: "── PHASE: CLOSED — normal traffic resumes ──" {
+    Client -> Gateway_CB: "GET /r/abc1234 [req #17, #18, …]"
+    Gateway_CB -> Mutex: "mu.Lock()\nstate=CLOSED, failures=0\nmu.Unlock()"
+    Gateway_CB -> Upstream: "proxy → HTTP 200"
+    Gateway_CB -> Client: "301 (normal)"
+  }
+}
+scenario_2: "SCENARIO 2 — Half-Open Probe FAILS → Back to OPEN" {
+  s2_trip: "── (same trip sequence, breaker now OPEN) ──" {
+    Client -> Gateway_CB: "GET /r/abc1234 [initial requests exhaust failures=5]"
+    Gateway_CB -> Mutex: "state ← OPEN (same as Scenario 1)"
+  }
+  s2_wait: "── t=30s elapses ──" {
+    Client -> Gateway_CB: "GET /r/abc1234 [probe attempt]"
+    Gateway_CB -> Mutex: "mu.Lock()\nstate=OPEN, timeout elapsed\nstate ← HALF_OPEN\nmu.Unlock()" {
+      style.stroke: "#f4a261"
+    }
+    Gateway_CB -> Upstream: "proxy.ServeHTTP(rw, r)  ← PROBE"
+    Upstream -> Gateway_CB: "HTTP 500 (upstream still broken)" {
+      style.stroke: red
+    }
+    Gateway_CB -> Mutex: "mu.Lock()\nstate=HALF_OPEN + failure\nlastFailureTime = now()\nstate ← OPEN\nlog WARN 'circuit breaker OPEN (probe failed)'\nmu.Unlock()" {
+      style.stroke: red
+      style.font-color: red
+    }
+    Gateway_CB -> Client: "502 (proxied from probe)"
+  }
+  s2_still_open: "── Still OPEN — requests continue to be rejected ──" {
+    Client -> Gateway_CB: "GET /r/abc1234 [next request]"
+    Gateway_CB -> Mutex: "mu.Lock()\nstate=OPEN, timeout NOT elapsed yet\nmu.Unlock()"
+    Gateway_CB -> Client: "503 — rejected immediately (ILLEGAL: OPEN→CLOSED skipped)" {
+      style.stroke: red
+    }
+  }
+}
+state_legend: "── State Variable Reference ──" {
+  Gateway_CB -> Mutex: "STATE TRANSITIONS (all guarded by mu.Lock/Unlock):\n  CLOSED  → OPEN:      failures >= maxFailures(5) within failureWindow(10s)\n  OPEN    → HALF_OPEN: time.Since(lastFailureTime) >= openTimeout(30s)\n  HALF_OPEN → CLOSED:  upstream() returns nil (probe success)\n  HALF_OPEN → OPEN:    upstream() returns error (probe failure)\n\nILLEGAL TRANSITIONS (must never occur):\n  CLOSED  → HALF_OPEN  (must trip OPEN first)\n  OPEN    → CLOSED     (must probe via HALF_OPEN)\n\nfailures field: incremented on 5xx, reset to 0 on success in CLOSED\nlastFailureTime: time.Time, written on every failure (all states)\nwindowStart: reset when entering OPEN state"
+}

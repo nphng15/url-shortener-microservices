@@ -1,0 +1,285 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+
+direction: right
+
+title: |md
+  ## IP Anonymization: SHA-256 Hash with Per-Service Salt
+  `func hashIP(ip, salt string) string`
+| {near: top-center}
+
+step0: {
+  label: "STEP 0\nStartup Guard"
+  shape: rectangle
+  style.fill: "#ff6b6b"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 4
+
+  env_check: {
+    label: "ANALYTICS_IP_SALT\nos.Getenv(...)"
+    shape: rectangle
+    style.fill: "#c0392b"
+    style.font-color: white
+    style.font: mono
+  }
+  fatal_exit: {
+    label: "os.Exit(1)\n\"IP_HASH_SALT is required\"\n(PRIVACY REQUIREMENT)"
+    shape: rectangle
+    style.fill: "#922b21"
+    style.font-color: white
+    style.bold: true
+    style.font: mono
+  }
+  ok_continue: {
+    label: "salt loaded\ninto Config.IPHashSalt\n(never re-read from env\nin hot path)"
+    shape: rectangle
+    style.fill: "#78281f"
+    style.font-color: white
+    style.font: mono
+  }
+
+  env_check -> fatal_exit: "== \"\" (empty)" {
+    style.stroke: "#ff0000"
+    style.bold: true
+  }
+  env_check -> ok_continue: "!= \"\" (present)" {
+    style.stroke: "#00ff00"
+  }
+}
+
+step1: {
+  label: "STEP 1\nInput Collection"
+  shape: rectangle
+  style.fill: "#2c3e50"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 4
+
+  raw_ip: {
+    label: "ip_raw\n\"1.2.3.4\""
+    shape: rectangle
+    style.fill: "#e74c3c"
+    style.font-color: white
+    style.bold: true
+    style.font: mono
+    width: 180
+  }
+  
+  raw_ip_note: |md
+    **⚠ DANGER ZONE**
+    Raw IP — GDPR-sensitive
+    Never written to DB
+    Never logged
+  |
+
+  salt_val: {
+    label: "salt\ncfg.IPHashSalt\n(from env at startup)"
+    shape: rectangle
+    style.fill: "#8e44ad"
+    style.font-color: white
+    style.font: mono
+    width: 180
+  }
+
+  salt_note: |md
+    **salt purpose:**
+    Prevents rainbow table attack.
+    Attacker with DB access cannot
+    reverse ip_hash → raw IP without
+    knowing this secret value.
+  |
+  
+  # Structural association for ELK (near: <id> is unsupported)
+  raw_ip_note -- raw_ip: {style.stroke-dash: 3}
+  salt_note -- salt_val: {style.stroke-dash: 3}
+}
+
+step2: {
+  label: "STEP 2\nString Concatenation"
+  shape: rectangle
+  style.fill: "#1a252f"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 4
+
+  concat_op: {
+    label: "ip + salt\n\"1.2.3.4\" + \"<secret>\"\n→ []byte"
+    shape: rectangle
+    style.fill: "#2980b9"
+    style.font-color: white
+    style.bold: true
+    style.font: mono
+    width: 280
+  }
+
+  concat_note: |md
+    `[]byte(ip + salt)`
+    Go string concat before
+    byte conversion. No separator
+    needed — salt length is fixed.
+  |
+  
+  concat_note -- concat_op: {style.stroke-dash: 3}
+}
+
+step3: {
+  label: "STEP 3\nSHA-256 Digest"
+  shape: rectangle
+  style.fill: "#154360"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 4
+
+  sha256_fn: {
+    label: "crypto/sha256\nsha256.Sum256(\n  []byte(ip+salt)\n)"
+    shape: rectangle
+    style.fill: "#1a5276"
+    style.font-color: white
+    style.bold: true
+    style.font: mono
+    width: 280
+  }
+  sha256_out: {
+    label: "[32]byte\n(256 bits)"
+    shape: rectangle
+    style.fill: "#154360"
+    style.font-color: "#aed6f1"
+    style.font: mono
+    width: 180
+  }
+  sha256_props: |md
+    **Properties:**
+    - One-way: cannot reverse
+    - Deterministic: same ip+salt → same hash
+    - stdlib: no external dependency
+  |
+
+  sha256_fn -> sha256_out: "returns [32]byte"
+  sha256_props -- sha256_fn: {style.stroke-dash: 3}
+}
+
+step4: {
+  label: "STEP 4\nHex Encoding"
+  shape: rectangle
+  style.fill: "#0b5345"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 4
+
+  hex_fn: {
+    label: "fmt.Sprintf(\n  \"%x\", h\n)"
+    shape: rectangle
+    style.fill: "#117a65"
+    style.font-color: white
+    style.bold: true
+    style.font: mono
+    width: 240
+  }
+  hex_out: {
+    label: "string\n\"a3f8c2...e1d9\"\n(64 hex chars = 32 bytes × 2)"
+    shape: rectangle
+    style.fill: "#0e6655"
+    style.font-color: "#a9dfbf"
+    style.font: mono
+    width: 280
+  }
+
+  hex_fn -> hex_out: "returns string"
+}
+
+step5: {
+  label: "STEP 5\nDB Storage"
+  shape: rectangle
+  style.fill: "#1c2833"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 4
+
+  db_col: {
+    label: "clicks.ip_hash\nTEXT NOT NULL\n\"a3f8c2...e1d9\""
+    shape: cylinder
+    style.fill: "#2471a3"
+    style.font-color: white
+    style.font: mono
+    width: 240
+  }
+  db_never: {
+    label: "clicks.ip_raw\n← COLUMN DOES NOT EXIST"
+    shape: rectangle
+    style.fill: "#922b21"
+    style.font-color: white
+    style.font: mono
+    style.stroke-dash: 5
+    style.opacity: 0.7
+    width: 240
+  }
+  db_note: |md
+    **Analytics DB schema:**
+    ip_hash TEXT NOT NULL  ✓
+    -- ip_raw: never stored ✗
+  |
+  
+  db_note -- db_col: {style.stroke-dash: 3}
+}
+
+func_sig: {
+  label: |go
+    // hashIP returns SHA-256(ip + salt) as 64-char hex string.
+    func hashIP(ip, salt string) string {
+        h := sha256.Sum256([]byte(ip + salt))
+        return fmt.Sprintf("%x", h)
+    }
+  |
+  style.fill: "#1c1c1c"
+  style.font-color: "#e8e8e8"
+  style.border-radius: 4
+  near: bottom-center
+}
+
+never_log: {
+  label: "⛔ NEVER LOG raw IP\nlog.Info(\"click\", \"ip\", r.RemoteAddr)  ← FORBIDDEN\nlog.Info(\"click\", \"ip_hash\", ipHash)   ← CORRECT"
+  shape: rectangle
+  style.fill: "#641e16"
+  style.font-color: "#f9ebea"
+  style.bold: true
+  style.font: mono
+  style.border-radius: 4
+  near: bottom-left
+}
+
+# Cross-Step Flow
+step0 -> step1: "salt stored in\nConfig struct" {
+  style.stroke: "#27ae60"
+  style.bold: true
+}
+step1.raw_ip -> step2.concat_op: "ip string" {
+  style.stroke: "#e74c3c"
+  style.bold: true
+}
+step1.salt_val -> step2.concat_op: "salt string" {
+  style.stroke: "#8e44ad"
+  style.bold: true
+}
+step2.concat_op -> step3.sha256_fn: "[]byte(ip+salt)" {
+  style.stroke: "#2980b9"
+  style.bold: true
+}
+step3.sha256_out -> step4.hex_fn: "[32]byte digest" {
+  style.stroke: "#1abc9c"
+  style.bold: true
+}
+step4.hex_out -> step5.db_col: "ip_hash string\n(64 chars)" {
+  style.stroke: "#27ae60"
+  style.bold: true
+}
+step1.raw_ip -> step5.db_never: "raw IP path\n(BLOCKED — no such column)" {
+  style.stroke: "#e74c3c"
+  style.stroke-dash: 5
+  style.bold: true
+  target-arrowhead.shape: cross
+}

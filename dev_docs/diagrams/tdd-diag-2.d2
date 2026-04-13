@@ -1,0 +1,287 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+  }
+}
+direction: right
+title: |md
+  ## Docker Compose Container Topology
+  **11 containers · bridge network · health-gated depends_on**
+| {near: top-center}
+# ── Colour classes ────────────────────────────────────────────────────────────
+classes: {
+  db: {
+    style: {
+      fill: "#e8d5f5"
+      stroke: "#7c3aed"
+      stroke-width: 2
+      border-radius: 6
+      font-size: 13
+    }
+  }
+  infra: {
+    style: {
+      fill: "#dbeafe"
+      stroke: "#1d4ed8"
+      stroke-width: 2
+      border-radius: 6
+      font-size: 13
+    }
+  }
+  app: {
+    style: {
+      fill: "#d1fae5"
+      stroke: "#065f46"
+      stroke-width: 2
+      border-radius: 6
+      font-size: 13
+    }
+  }
+  gw: {
+    style: {
+      fill: "#fef3c7"
+      stroke: "#b45309"
+      stroke-width: 2
+      border-radius: 6
+      font-size: 13
+    }
+  }
+}
+# ── Infrastructure containers ─────────────────────────────────────────────────
+url_db: |md
+  **url_db**
+  postgres:16-alpine
+  host:5432 → container:5432
+  ---
+  healthcheck:
+  `pg_isready -U urluser -d urldb`
+  interval:5s · retries:10
+| {
+  class: db
+}
+analytics_db: |md
+  **analytics_db**
+  postgres:16-alpine
+  host:5433 → container:5432
+  ---
+  healthcheck:
+  `pg_isready -U analyticsuser -d analyticsdb`
+  interval:5s · retries:10
+| {
+  class: db
+}
+user_db: |md
+  **user_db**
+  postgres:16-alpine
+  host:5434 → container:5432
+  ---
+  healthcheck:
+  `pg_isready -U useruser -d userdb`
+  interval:5s · retries:10
+| {
+  class: db
+}
+notification_db: |md
+  **notification_db**
+  postgres:16-alpine
+  host:5435 → container:5432
+  ---
+  healthcheck:
+  `pg_isready -U notificationuser -d notificationdb`
+  interval:5s · retries:10
+| {
+  class: db
+}
+redis: |md
+  **redis**
+  redis:7-alpine
+  host:6379 → container:6379
+  mode: ephemeral cache
+  (--save "" --appendonly no)
+  ---
+  healthcheck:
+  `redis-cli ping`
+  interval:5s · retries:10
+| {
+  class: infra
+}
+rabbitmq: |md
+  **rabbitmq**
+  rabbitmq:3.13-management-alpine
+  host:5672 → container:5672  (AMQP)
+  host:15672 → container:15672 (Mgmt UI)
+  ---
+  healthcheck:
+  `rabbitmq-diagnostics ping`
+  interval:10s · retries:10 · start:20s
+| {
+  class: infra
+}
+# ── Application containers ────────────────────────────────────────────────────
+url_service: |md
+  **url-service**
+  build: ./services/url-service
+  host:8081 → container:8080
+  ENV: DATABASE_URL · REDIS_URL
+       RABBITMQ_URL · JWT_SECRET
+       SHORT_URL_BASE · IP_HASH_SALT
+  ---
+  healthcheck:
+  `wget -qO- http://localhost:8080/health`
+  interval:10s · retries:5 · start:15s
+| {
+  class: app
+}
+analytics_service: |md
+  **analytics-service**
+  build: ./services/analytics-service
+  host:8082 → container:8080
+  ENV: DATABASE_URL · RABBITMQ_URL
+       IP_HASH_SALT
+  ---
+  healthcheck:
+  `wget -qO- http://localhost:8080/health`
+  interval:10s · retries:5 · start:15s
+| {
+  class: app
+}
+user_service: |md
+  **user-service**
+  build: ./services/user-service
+  host:8083 → container:8080
+  ENV: DATABASE_URL · JWT_SECRET
+       BCRYPT_COST · TOKEN_TTL_HOURS
+  ---
+  healthcheck:
+  `wget -qO- http://localhost:8080/health`
+  interval:10s · retries:5 · start:15s
+| {
+  class: app
+}
+notification_service: |md
+  **notification-service**
+  build: ./services/notification-service
+  host:8084 → container:8080
+  ENV: DATABASE_URL · RABBITMQ_URL
+       JWT_SECRET
+  ---
+  healthcheck:
+  `wget -qO- http://localhost:8080/health`
+  interval:10s · retries:5 · start:15s
+| {
+  class: app
+}
+gateway: |md
+  **gateway**
+  build: ./gateway
+  host:8080 → container:8080
+  ENV: URL_SERVICE_URL · ANALYTICS_SERVICE_URL
+       USER_SERVICE_URL · NOTIFICATION_SERVICE_URL
+       REDIS_URL · JWT_SECRET
+  ---
+  healthcheck:
+  `wget -qO- http://localhost:8080/health`
+  interval:10s · retries:5 · start:20s
+| {
+  class: gw
+}
+# ── depends_on edges (solid = health-gated dependency) ───────────────────────
+url_db -> url_service: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#7c3aed"
+    stroke-width: 2
+  }
+}
+redis -> url_service: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#1d4ed8"
+    stroke-width: 2
+  }
+}
+rabbitmq -> url_service: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#1d4ed8"
+    stroke-width: 2
+  }
+}
+analytics_db -> analytics_service: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#7c3aed"
+    stroke-width: 2
+  }
+}
+rabbitmq -> analytics_service: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#1d4ed8"
+    stroke-width: 2
+  }
+}
+user_db -> user_service: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#7c3aed"
+    stroke-width: 2
+  }
+}
+notification_db -> notification_service: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#7c3aed"
+    stroke-width: 2
+  }
+}
+rabbitmq -> notification_service: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#1d4ed8"
+    stroke-width: 2
+  }
+}
+url_service -> gateway: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#065f46"
+    stroke-width: 2
+  }
+}
+analytics_service -> gateway: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#065f46"
+    stroke-width: 2
+  }
+}
+user_service -> gateway: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#065f46"
+    stroke-width: 2
+  }
+}
+notification_service -> gateway: "condition:\nservice_healthy" {
+  style: {
+    stroke: "#065f46"
+    stroke-width: 2
+  }
+}
+redis -> gateway: "rate-limit store\n(network reachable)" {
+  style: {
+    stroke: "#1d4ed8"
+    stroke-width: 1
+    stroke-dash: 4
+  }
+}
+# ── Legend ────────────────────────────────────────────────────────────────────
+legend: {
+  near: bottom-center
+  style: {
+    fill: "#f8fafc"
+    stroke: "#cbd5e1"
+    stroke-width: 1
+    border-radius: 6
+  }
+  content: |md
+    **Legend**
+    ─── solid arrow = `depends_on condition: service_healthy`
+    - - - dashed arrow = network reachability (no health gate)
+    🟣 Purple = PostgreSQL databases (ports 5432–5435)
+    🔵 Blue   = Shared infra: Redis :6379, RabbitMQ :5672/:15672
+    🟢 Green  = Application services (ports 8081–8084)
+    🟡 Yellow = API Gateway (port 8080, client-facing)
+  |
+}

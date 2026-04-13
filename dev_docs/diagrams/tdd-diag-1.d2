@@ -1,0 +1,339 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+  }
+}
+direction: right
+title: |md
+  # URL Shortener — Monorepo Directory Tree
+  Module paths · Container mappings · File annotations
+| {near: top-center}
+root: url-shortener/ {
+  style.fill: "#F5F5F5"
+  style.stroke: "#333333"
+  style.stroke-width: 2
+  style.border-radius: 6
+  gowork: go.work {
+    style.fill: "#E8E8E8"
+    style.stroke: "#999999"
+    style.font: mono
+    style.font-size: 11
+  }
+  docker_compose: docker-compose.yml {
+    style.fill: "#E8F5E9"
+    style.stroke: "#388E3C"
+    style.font: mono
+    style.font-size: 11
+  }
+  shared: shared/ {
+    style.fill: "#EDE7F6"
+    style.stroke: "#7B1FA2"
+    style.stroke-width: 2
+    style.border-radius: 4
+    events: events/ {
+      style.fill: "#D1C4E9"
+      style.stroke: "#7B1FA2"
+      style.border-radius: 3
+      events_go: events.go {
+        style.fill: "#EDE7F6"
+        style.stroke: "#9C27B0"
+        style.font: mono
+        style.font-size: 11
+      }
+      events_mod: go.mod {
+        style.fill: "#EDE7F6"
+        style.stroke: "#9C27B0"
+        style.font: mono
+        style.font-size: 11
+      }
+      events_modpath: |md
+        `github.com/…/shared/events`
+      | {
+        style.fill: "#F3E5F5"
+        style.stroke: "#CE93D8"
+        style.font-size: 10
+      }
+    }
+    logger: logger/ {
+      style.fill: "#D1C4E9"
+      style.stroke: "#7B1FA2"
+      style.border-radius: 3
+      logger_go: logger.go {
+        style.fill: "#EDE7F6"
+        style.stroke: "#9C27B0"
+        style.font: mono
+        style.font-size: 11
+      }
+      logger_mod: go.mod {
+        style.fill: "#EDE7F6"
+        style.stroke: "#9C27B0"
+        style.font: mono
+        style.font-size: 11
+      }
+      logger_modpath: |md
+        `github.com/…/shared/logger`
+      | {
+        style.fill: "#F3E5F5"
+        style.stroke: "#CE93D8"
+        style.font-size: 10
+      }
+    }
+    auth: auth/ {
+      style.fill: "#D1C4E9"
+      style.stroke: "#7B1FA2"
+      style.border-radius: 3
+      auth_go: auth.go {
+        style.fill: "#EDE7F6"
+        style.stroke: "#9C27B0"
+        style.font: mono
+        style.font-size: 11
+      }
+      auth_mw: middleware.go {
+        style.fill: "#EDE7F6"
+        style.stroke: "#9C27B0"
+        style.font: mono
+        style.font-size: 11
+      }
+      auth_mod: go.mod {
+        style.fill: "#EDE7F6"
+        style.stroke: "#9C27B0"
+        style.font: mono
+        style.font-size: 11
+      }
+      auth_modpath: |md
+        `github.com/…/shared/auth`
+      | {
+        style.fill: "#F3E5F5"
+        style.stroke: "#CE93D8"
+        style.font-size: 10
+      }
+    }
+  }
+  services: services/ {
+    style.fill: "#E3F2FD"
+    style.stroke: "#1565C0"
+    style.stroke-width: 2
+    style.border-radius: 4
+    url_svc: url-service/ {
+      style.fill: "#BBDEFB"
+      style.stroke: "#1976D2"
+      style.border-radius: 3
+      url_main: main.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_config: config.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_db: db.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_redis: redis.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_mq: rabbitmq.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_handler: handler.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_store: store.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_outbox: outbox.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_cache: cache.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_codegen: codegen.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_health: health.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_dockerfile: Dockerfile {style.fill: "#FFF9C4"; style.stroke: "#F9A825"; style.font: mono; style.font-size: 11}
+      url_gomod: go.mod {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      url_modpath: |md
+        `github.com/…/url-service`
+      | {style.fill: "#E1F5FE"; style.stroke: "#81D4FA"; style.font-size: 10}
+      url_container: |md
+        🐳 **container:** `url-service`
+        **port:** 8081→8080
+        **DB:** url\_db :5432
+        **Redis:** :6379
+        **MQ:** :5672
+      | {style.fill: "#E8F5E9"; style.stroke: "#66BB6A"; style.font-size: 10}
+    }
+    analytics_svc: analytics-service/ {
+      style.fill: "#BBDEFB"
+      style.stroke: "#1976D2"
+      style.border-radius: 3
+      an_main: main.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      an_config: config.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      an_db: db.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      an_mq: rabbitmq.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      an_consumer: consumer.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      an_store: store.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      an_handler: handler.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      an_milestone: milestone.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      an_health: health.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      an_dockerfile: Dockerfile {style.fill: "#FFF9C4"; style.stroke: "#F9A825"; style.font: mono; style.font-size: 11}
+      an_gomod: go.mod {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      an_modpath: |md
+        `github.com/…/analytics-service`
+      | {style.fill: "#E1F5FE"; style.stroke: "#81D4FA"; style.font-size: 10}
+      an_container: |md
+        🐳 **container:** `analytics-service`
+        **port:** 8082→8080
+        **DB:** analytics\_db :5433
+        **MQ:** :5672
+      | {style.fill: "#E8F5E9"; style.stroke: "#66BB6A"; style.font-size: 10}
+    }
+    user_svc: user-service/ {
+      style.fill: "#BBDEFB"
+      style.stroke: "#1976D2"
+      style.border-radius: 3
+      us_main: main.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      us_config: config.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      us_db: db.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      us_store: store.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      us_handler: handler.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      us_token: token.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      us_password: password.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      us_health: health.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      us_dockerfile: Dockerfile {style.fill: "#FFF9C4"; style.stroke: "#F9A825"; style.font: mono; style.font-size: 11}
+      us_gomod: go.mod {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      us_modpath: |md
+        `github.com/…/user-service`
+      | {style.fill: "#E1F5FE"; style.stroke: "#81D4FA"; style.font-size: 10}
+      us_container: |md
+        🐳 **container:** `user-service`
+        **port:** 8083→8080
+        **DB:** user\_db :5434
+      | {style.fill: "#E8F5E9"; style.stroke: "#66BB6A"; style.font-size: 10}
+    }
+    notif_svc: notification-service/ {
+      style.fill: "#BBDEFB"
+      style.stroke: "#1976D2"
+      style.border-radius: 3
+      no_main: main.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      no_config: config.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      no_db: db.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      no_mq: rabbitmq.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      no_consumer: consumer.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      no_store: store.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      no_handler: handler.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      no_health: health.go {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      no_dockerfile: Dockerfile {style.fill: "#FFF9C4"; style.stroke: "#F9A825"; style.font: mono; style.font-size: 11}
+      no_gomod: go.mod {style.fill: "#E3F2FD"; style.stroke: "#42A5F5"; style.font: mono; style.font-size: 11}
+      no_modpath: |md
+        `github.com/…/notification-service`
+      | {style.fill: "#E1F5FE"; style.stroke: "#81D4FA"; style.font-size: 10}
+      no_container: |md
+        🐳 **container:** `notification-service`
+        **port:** 8084→8080
+        **DB:** notification\_db :5435
+        **MQ:** :5672
+      | {style.fill: "#E8F5E9"; style.stroke: "#66BB6A"; style.font-size: 10}
+    }
+  }
+  gateway: gateway/ {
+    style.fill: "#FFF3E0"
+    style.stroke: "#E65100"
+    style.stroke-width: 2
+    style.border-radius: 4
+    gw_main: main.go {style.fill: "#FFE0B2"; style.stroke: "#FB8C00"; style.font: mono; style.font-size: 11}
+    gw_config: config.go {style.fill: "#FFE0B2"; style.stroke: "#FB8C00"; style.font: mono; style.font-size: 11}
+    gw_router: router.go {style.fill: "#FFE0B2"; style.stroke: "#FB8C00"; style.font: mono; style.font-size: 11}
+    gw_proxy: proxy.go {style.fill: "#FFE0B2"; style.stroke: "#FB8C00"; style.font: mono; style.font-size: 11}
+    gw_mw: middleware.go {style.fill: "#FFE0B2"; style.stroke: "#FB8C00"; style.font: mono; style.font-size: 11}
+    gw_rl: ratelimit.go {style.fill: "#FFE0B2"; style.stroke: "#FB8C00"; style.font: mono; style.font-size: 11}
+    gw_cb: circuitbreaker.go {style.fill: "#FFE0B2"; style.stroke: "#FB8C00"; style.font: mono; style.font-size: 11}
+    gw_jwt: jwtmiddleware.go {style.fill: "#FFE0B2"; style.stroke: "#FB8C00"; style.font: mono; style.font-size: 11}
+    gw_health: health.go {style.fill: "#FFE0B2"; style.stroke: "#FB8C00"; style.font: mono; style.font-size: 11}
+    gw_dockerfile: Dockerfile {style.fill: "#FFF9C4"; style.stroke: "#F9A825"; style.font: mono; style.font-size: 11}
+    gw_gomod: go.mod {style.fill: "#FFE0B2"; style.stroke: "#FB8C00"; style.font: mono; style.font-size: 11}
+    gw_modpath: |md
+      `github.com/…/gateway`
+    | {style.fill: "#FFF3E0"; style.stroke: "#FFCC80"; style.font-size: 10}
+    gw_container: |md
+      🐳 **container:** `gateway`
+      **port:** 8080→8080
+      **Redis:** :6379 (rate limit)
+      **upstream:** all 4 services
+    | {style.fill: "#E8F5E9"; style.stroke: "#66BB6A"; style.font-size: 10}
+  }
+}
+legend: |md
+  **Legend**
+  🟣 shared/ — imported by all services via go.work replace directives
+  🔵 services/ — one binary per service, one DB per service
+  🟠 gateway/ — pure infrastructure, zero domain logic
+  🟡 Dockerfile — multi-stage build; context = monorepo root
+  🟢 container annotation — Docker Compose service name + host port mapping
+| {
+  near: bottom-center
+  style.fill: "#FAFAFA"
+  style.stroke: "#BDBDBD"
+  style.font-size: 11
+}
+gowork_note: |md
+  **go.work** lists all 8 modules:
+  `shared/events`, `shared/logger`, `shared/auth`,
+  `url-service`, `analytics-service`,
+  `user-service`, `notification-service`, `gateway`
+| {
+  near: top-left
+  style.fill: "#F5F5F5"
+  style.stroke: "#BDBDBD"
+  style.font-size: 10
+}
+infra: Infra Containers (no Go source) {
+  style.fill: "#E8F5E9"
+  style.stroke: "#2E7D32"
+  style.stroke-width: 2
+  style.border-radius: 4
+  url_db_c: url_db {
+    style.fill: "#C8E6C9"
+    style.stroke: "#388E3C"
+    label: "url_db\npostgres:16-alpine\nhost port: 5432"
+    style.font: mono
+    style.font-size: 11
+  }
+  an_db_c: analytics_db {
+    style.fill: "#C8E6C9"
+    style.stroke: "#388E3C"
+    label: "analytics_db\npostgres:16-alpine\nhost port: 5433"
+    style.font: mono
+    style.font-size: 11
+  }
+  us_db_c: user_db {
+    style.fill: "#C8E6C9"
+    style.stroke: "#388E3C"
+    label: "user_db\npostgres:16-alpine\nhost port: 5434"
+    style.font: mono
+    style.font-size: 11
+  }
+  no_db_c: notification_db {
+    style.fill: "#C8E6C9"
+    style.stroke: "#388E3C"
+    label: "notification_db\npostgres:16-alpine\nhost port: 5435"
+    style.font: mono
+    style.font-size: 11
+  }
+  rabbitmq_c: rabbitmq {
+    style.fill: "#FFCCBC"
+    style.stroke: "#BF360C"
+    label: "rabbitmq\n3.13-management-alpine\nAMQP :5672 | UI :15672"
+    style.font: mono
+    style.font-size: 11
+  }
+  redis_c: redis {
+    style.fill: "#FFCCBC"
+    style.stroke: "#BF360C"
+    label: "redis\n7-alpine\nhost port: 6379"
+    style.font: mono
+    style.font-size: 11
+  }
+}
+root.docker_compose -> infra: "defines all containers" {style.stroke-dash: 4; style.stroke: "#388E3C"}
+root.services.url_svc.url_gomod -> root.shared.events.events_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.services.url_svc.url_gomod -> root.shared.logger.logger_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.services.url_svc.url_gomod -> root.shared.auth.auth_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.services.analytics_svc.an_gomod -> root.shared.events.events_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.services.analytics_svc.an_gomod -> root.shared.logger.logger_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.services.user_svc.us_gomod -> root.shared.auth.auth_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.services.user_svc.us_gomod -> root.shared.logger.logger_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.services.notif_svc.no_gomod -> root.shared.events.events_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.services.notif_svc.no_gomod -> root.shared.auth.auth_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.services.notif_svc.no_gomod -> root.shared.logger.logger_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.gateway.gw_gomod -> root.shared.auth.auth_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.gateway.gw_gomod -> root.shared.logger.logger_mod: "replace directive" {style.stroke-dash: 3; style.stroke: "#9C27B0"; style.font-size: 10}
+root.services.url_svc.url_container -> infra.url_db_c: "owns" {style.stroke: "#1976D2"}
+root.services.analytics_svc.an_container -> infra.an_db_c: "owns" {style.stroke: "#1976D2"}
+root.services.user_svc.us_container -> infra.us_db_c: "owns" {style.stroke: "#1976D2"}
+root.services.notif_svc.no_container -> infra.no_db_c: "owns" {style.stroke: "#1976D2"}
+root.services.url_svc.url_container -> infra.rabbitmq_c: "publishes" {style.stroke: "#FB8C00"; style.stroke-dash: 5}
+root.services.analytics_svc.an_container -> infra.rabbitmq_c: "consumes" {style.stroke: "#FB8C00"; style.stroke-dash: 5}
+root.services.notif_svc.no_container -> infra.rabbitmq_c: "consumes" {style.stroke: "#FB8C00"; style.stroke-dash: 5}
+root.services.url_svc.url_container -> infra.redis_c: "cache" {style.stroke: "#E53935"; style.stroke-dash: 5}
+root.gateway.gw_container -> infra.redis_c: "rate limit" {style.stroke: "#E53935"; style.stroke-dash: 5}

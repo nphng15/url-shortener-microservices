@@ -1,0 +1,241 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+direction: right
+title: |md
+  ## `users` Table Schema, Index Layout, and Go Struct Mapping
+  **user_db** · PostgreSQL 16 · user-service exclusive
+| {near: top-center}
+pg_table: "users (user_db)" {
+  style.fill: "#3B1F6B"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 6
+  shape: sql_table
+  id: "uuid" {constraint: [primary_key]}
+  email: "text" {constraint: [unique; not null]}
+  password_hash: "text" {constraint: [not null]}
+  created_at: "timestamptz" {constraint: [not null]}
+}
+indexes: "PostgreSQL Indexes" {
+  style.fill: "#1A1A2E"
+  style.font-color: "#E0E0E0"
+  style.border-radius: 6
+  pk_index: "users_pkey (B-tree)" {
+    style.fill: "#6B2FB3"
+    style.font-color: white
+    style.border-radius: 4
+    label: |md
+      **users_pkey**
+      Type: B-tree PRIMARY KEY
+      Column: id (uuid)
+      Implicit: gen_random_uuid()
+      Lookup: O(log n)
+    |
+  }
+  email_index: "idx_users_email (B-tree UNIQUE)" {
+    style.fill: "#2E4057"
+    style.font-color: white
+    style.border-radius: 4
+    label: |md
+      **idx_users_email**
+      Type: B-tree UNIQUE
+      Column: email (text)
+      ON CONFLICT → pg error 23505
+      Lookup: O(log n)
+    |
+  }
+}
+go_struct: "Go Struct — User" {
+  style.fill: "#0D3349"
+  style.font-color: "#7DD3FC"
+  style.bold: true
+  style.border-radius: 6
+  style.font: mono
+  shape: class
+  "+ID: string": "// UUID v4 string · json:\"user_id\""
+  "+Email: string": "// json:\"email\""
+  "-PasswordHash: string": "// NEVER serialized · json:\"-\""
+  "+CreatedAt: time.Time": "// json:\"created_at\""
+}
+constraints: "Constraint Behaviour" {
+  style.fill: "#1C1C1C"
+  style.font-color: "#F0F0F0"
+  style.border-radius: 6
+  dup_email: "23505 unique_violation" {
+    style.fill: "#7A1C1C"
+    style.font-color: white
+    style.border-radius: 4
+    label: |md
+      **pg error code 23505**
+      Trigger: INSERT duplicate email
+      Detected by: isPgUniqueViolation()
+      App sentinel: ErrDuplicateEmail
+      HTTP: 409 Conflict
+    |
+  }
+  null_guard: "NOT NULL enforcement" {
+    style.fill: "#1C3A1C"
+    style.font-color: white
+    style.border-radius: 4
+    label: |md
+      **NOT NULL columns**
+      email, password_hash, created_at
+      Violated → pg error 23502
+      (should never occur: app validates first)
+    |
+  }
+  no_fk: "No Foreign Keys" {
+    style.fill: "#2A2A1C"
+    style.font-color: "#E0E0A0"
+    style.border-radius: 4
+    label: |md
+      **Self-contained service**
+      user_db has no FK references
+      to any other service's DB.
+      UserID in JWT is a string claim —
+      never a DB cross-reference.
+    |
+  }
+}
+defaults: "Column Defaults" {
+  style.fill: "#1A2A3A"
+  style.font-color: "#B0D0F0"
+  style.border-radius: 6
+  id_default: "id DEFAULT" {
+    style.fill: "#243447"
+    style.font-color: white
+    style.border-radius: 4
+    label: |md
+      **gen_random_uuid()**
+      PostgreSQL built-in (pg 13+)
+      Generates UUID v4 at INSERT time
+      Go side: omit id in INSERT SQL;
+      read back via RETURNING clause
+    |
+  }
+  ts_default: "created_at DEFAULT" {
+    style.fill: "#243447"
+    style.font-color: white
+    style.border-radius: 4
+    label: |md
+      **now()**
+      Set at INSERT time by DB server
+      Type: TIMESTAMPTZ (UTC-aware)
+      Go scan: time.Time (pgx auto-converts)
+    |
+  }
+}
+field_map: "Field Mapping Detail" {
+  style.fill: "#12263A"
+  style.font-color: "#C0E0FF"
+  style.border-radius: 6
+  shape: sql_table
+  "id → ID": "uuid → string (pgx scans UUID as text)"
+  "email → Email": "text → string"
+  "password_hash → PasswordHash": "text → string · read-only after Insert"
+  "created_at → CreatedAt": "timestamptz → time.Time (UTC)"
+}
+query_paths: "SQL Query Paths" {
+  style.fill: "#1A1A1A"
+  style.font-color: "#D0D0D0"
+  style.border-radius: 6
+  insert_q: "INSERT (register)" {
+    style.fill: "#2A1F3D"
+    style.font-color: "#D0B0FF"
+    style.border-radius: 4
+    style.font: mono
+    label: |'md
+      sql
+      INSERT INTO users (email, password_hash)
+      VALUES ($1, $2)
+      RETURNING id, email, created_at
+      
+      id + created_at populated by DB defaults
+    '|
+  }
+  select_q: "SELECT (login)" {
+    style.fill: "#1F2D3D"
+    style.font-color: "#B0D4FF"
+    style.border-radius: 4
+    style.font: mono
+    label: |'md
+      sql
+      SELECT id, email, password_hash, created_at
+      FROM users WHERE email = $1
+      
+      Uses idx_users_email (unique B-tree)
+      Returns all 4 fields incl. hash for bcrypt.Compare
+    '|
+  }
+}
+pg_table -> indexes.pk_index: "PK lookup\n(id = \$1)" {
+  style.stroke: "#9B59B6"
+  style.stroke-width: 2
+}
+pg_table -> indexes.email_index: "UNIQUE lookup\n(email = \$1)" {
+  style.stroke: "#3498DB"
+  style.stroke-width: 2
+}
+indexes.email_index -> constraints.dup_email: "conflict on\nINSERT" {
+  style.stroke: "#E74C3C"
+  style.stroke-width: 2
+  style.stroke-dash: 4
+}
+pg_table -> defaults.id_default: "DEFAULT\ngen_random_uuid()" {
+  style.stroke: "#27AE60"
+  style.stroke-width: 1
+  style.stroke-dash: 3
+}
+pg_table -> defaults.ts_default: "DEFAULT\nnow()" {
+  style.stroke: "#27AE60"
+  style.stroke-width: 1
+  style.stroke-dash: 3
+}
+go_struct -> field_map: "pgx.Scan()\nmaps columns" {
+  style.stroke: "#F39C12"
+  style.stroke-width: 2
+}
+field_map -> pg_table: "column\ncorrespondence" {
+  style.stroke: "#F39C12"
+  style.stroke-width: 1
+  style.stroke-dash: 3
+}
+query_paths.insert_q -> pg_table: "INSERT\n→ RETURNING" {
+  style.stroke: "#2ECC71"
+  style.stroke-width: 2
+}
+query_paths.select_q -> pg_table: "SELECT\nvia email index" {
+  style.stroke: "#2980B9"
+  style.stroke-width: 2
+}
+query_paths.select_q -> indexes.email_index: "uses index" {
+  style.stroke: "#2980B9"
+  style.stroke-width: 1
+  style.stroke-dash: 5
+}
+constraints.no_fk -> pg_table: "self-contained\nno FK refs" {
+  style.stroke: "#7F8C8D"
+  style.stroke-width: 1
+  style.stroke-dash: 6
+}
+ownership: "`user-service` EXCLUSIVE OWNERSHIP" {
+  style.fill: "#0A0A0A"
+  style.font-color: "#FF6B6B"
+  style.border-radius: 8
+  style.bold: true
+  label: |md
+    ⚠ **Invariant**: No other service ever connects to user_db.
+    All other services treat user identity as a verified JWT claim (string).
+    `password_hash` column is NEVER returned in any HTTP response struct.
+    Go field tag: `json:"-"` prevents accidental serialization.
+  |
+}
+ownership -> pg_table: "" {
+  style.stroke: "#FF6B6B"
+  style.stroke-width: 2
+  style.stroke-dash: 3
+}

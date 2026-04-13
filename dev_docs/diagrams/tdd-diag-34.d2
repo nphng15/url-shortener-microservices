@@ -1,0 +1,417 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 6
+  }
+}
+direction: right
+title: |md
+  ## Notification Service — Module Architecture & Consumer Flow
+| {near: top-center}
+###############################################################################
+# EXTERNAL INPUT
+###############################################################################
+rmq: "RabbitMQ\n\"notifications.events\"" {
+  shape: queue
+  style.fill: "#f5e6ff"
+  style.stroke: "#9b59b6"
+  style.font-size: 13
+  style.bold: true
+  k1: "routing_key:\n\"url.created\"" {
+    shape: text
+    style.font-size: 11
+    style.font-color: "#6c3483"
+  }
+  k2: "routing_key:\n\"url.deleted\"" {
+    shape: text
+    style.font-size: 11
+    style.font-color: "#6c3483"
+  }
+  k3: "routing_key:\n\"milestone.reached\"" {
+    shape: text
+    style.font-size: 11
+    style.font-color: "#6c3483"
+  }
+}
+http_client: "HTTP Client\n(JWT Bearer)" {
+  shape: person
+  style.fill: "#e8f4f8"
+  style.stroke: "#2980b9"
+}
+###############################################################################
+# NOTIFICATION CONSUMER
+###############################################################################
+consumer: NotificationConsumer {
+  style.fill: "#f9f0ff"
+  style.stroke: "#7d3c98"
+  style.border-radius: 8
+  fields: |md
+    **struct NotificationConsumer**
+    - conn   \*RabbitMQConn
+    - pool   \*pgxpool.Pool
+    - store  NotificationRepository
+    - log    \*slog.Logger
+  | {
+    style.fill: "#ede0ff"
+    style.stroke: "#7d3c98"
+    style.font-size: 12
+  }
+  run: "Run(ctx context.Context)" {
+    shape: rectangle
+    style.fill: "#d7bde2"
+    style.stroke: "#6c3483"
+    style.font-size: 12
+    style.bold: true
+  }
+  qos: "ch.Qos(prefetch=1)\nch.Consume(\"notifications.events\",\n  autoAck=false)" {
+    shape: rectangle
+    style.fill: "#e8daef"
+    style.stroke: "#7d3c98"
+    style.font-size: 11
+  }
+  pd: "processDelivery(ctx, d amqp.Delivery)" {
+    shape: rectangle
+    style.fill: "#d7bde2"
+    style.stroke: "#6c3483"
+    style.font-size: 12
+    style.bold: true
+  }
+  panic_guard: "defer recover()\n→ d.Ack(false) on panic" {
+    shape: hexagon
+    style.fill: "#fadbd8"
+    style.stroke: "#e74c3c"
+    style.font-size: 11
+  }
+  route_switch: "switch d.RoutingKey" {
+    shape: diamond
+    style.fill: "#fdebd0"
+    style.stroke: "#e67e22"
+    style.font-size: 12
+    style.bold: true
+  }
+  fields -> run: "" { style.stroke-dash: 3 }
+  run -> qos
+  qos -> pd: "for each\ndelivery"
+  pd -> panic_guard: "guard"
+  pd -> route_switch
+}
+###############################################################################
+# ROUTING BRANCHES
+###############################################################################
+branch_created: "url.created branch" {
+  style.fill: "#eafaf1"
+  style.stroke: "#1e8449"
+  style.border-radius: 6
+  decode1: "json.Unmarshal(body)\n→ URLCreatedEvent" {
+    shape: rectangle
+    style.fill: "#d5f5e3"
+    style.stroke: "#1e8449"
+    style.font-size: 11
+  }
+  extract1: "userID   = evt.UserID\nuserEmail = evt.UserEmail\nmsg = \"new short URL created:\\n{short_code} → {original_url}\"" {
+    shape: rectangle
+    style.fill: "#d5f5e3"
+    style.stroke: "#27ae60"
+    style.font-size: 11
+  }
+  poison1: "json.Unmarshal fails\n→ d.Ack(false) [poison]" {
+    shape: hexagon
+    style.fill: "#fadbd8"
+    style.stroke: "#c0392b"
+    style.font-size: 10
+  }
+  decode1 -> extract1
+  decode1 -> poison1: "error"
+}
+branch_deleted: "url.deleted branch" {
+  style.fill: "#fef9e7"
+  style.stroke: "#b7950b"
+  style.border-radius: 6
+  decode2: "json.Unmarshal(body)\n→ URLDeletedEvent" {
+    shape: rectangle
+    style.fill: "#fef9e7"
+    style.stroke: "#b7950b"
+    style.font-size: 11
+  }
+  extract2: "userID   = evt.UserID\nuserEmail = evt.UserEmail\nmsg = \"URL {short_code} deleted\"" {
+    shape: rectangle
+    style.fill: "#fef9e7"
+    style.stroke: "#d4ac0d"
+    style.font-size: 11
+  }
+  poison2: "json.Unmarshal fails\n→ d.Ack(false) [poison]" {
+    shape: hexagon
+    style.fill: "#fadbd8"
+    style.stroke: "#c0392b"
+    style.font-size: 10
+  }
+  decode2 -> extract2
+  decode2 -> poison2: "error"
+}
+branch_milestone: "milestone.reached branch" {
+  style.fill: "#eaf4fb"
+  style.stroke: "#1a5276"
+  style.border-radius: 6
+  decode3: "json.Unmarshal(body)\n→ MilestoneReachedEvent" {
+    shape: rectangle
+    style.fill: "#d6eaf8"
+    style.stroke: "#1a5276"
+    style.font-size: 11
+  }
+  extract3: "userID   = evt.UserID\nuserEmail = evt.UserEmail\nmsg = \"congrats: {short_code}\\nhit {milestone_n} clicks!\"" {
+    shape: rectangle
+    style.fill: "#d6eaf8"
+    style.stroke: "#2e86c1"
+    style.font-size: 11
+  }
+  poison3: "json.Unmarshal fails\n→ d.Ack(false) [poison]" {
+    shape: hexagon
+    style.fill: "#fadbd8"
+    style.stroke: "#c0392b"
+    style.font-size: 10
+  }
+  decode3 -> extract3
+  decode3 -> poison3: "error"
+}
+unknown_key: "Unknown routing key\n→ log.Warn + d.Ack(false)" {
+  shape: hexagon
+  style.fill: "#f2f3f4"
+  style.stroke: "#7f8c8d"
+  style.font-size: 11
+}
+###############################################################################
+# VALIDATE + TRANSACTION BLOCK
+###############################################################################
+validate: "Validate: userID != \"\"\n(fail → d.Ack(false))" {
+  shape: diamond
+  style.fill: "#fdebd0"
+  style.stroke: "#ca6f1e"
+  style.font-size: 11
+  style.bold: true
+}
+tx_block: "Database Transaction" {
+  style.fill: "#eaecee"
+  style.stroke: "#566573"
+  style.border-radius: 8
+  begin: "pool.Begin(ctx)" {
+    shape: rectangle
+    style.fill: "#d5dbdb"
+    style.stroke: "#566573"
+    style.font-size: 11
+    style.bold: true
+  }
+  insert: "INSERT INTO notifications\n  (user_id, event_type, payload,\n   status='pending')\nRETURNING id, created_at" {
+    shape: rectangle
+    style.fill: "#d5dbdb"
+    style.stroke: "#566573"
+    style.font-size: 11
+  }
+  mock_email: "mockEmail():\nlog.Info(\"would send email to user\",\n  user_id, user_email, message,\n  notification_id, correlation_id)" {
+    shape: rectangle
+    style.fill: "#aed6f1"
+    style.stroke: "#2980b9"
+    style.font-size: 11
+    style.italic: true
+  }
+  update_status: "UPDATE notifications\n  SET status='sent',\n      sent_at=now()\nWHERE id=\$1\nRETURNING sent_at" {
+    shape: rectangle
+    style.fill: "#d5dbdb"
+    style.stroke: "#566573"
+    style.font-size: 11
+  }
+  commit: "tx.Commit(ctx)" {
+    shape: rectangle
+    style.fill: "#a9cce3"
+    style.stroke: "#2471a3"
+    style.font-size: 11
+    style.bold: true
+  }
+  tx_err: "tx.Rollback()\n→ d.Nack(false, requeue=true)" {
+    shape: hexagon
+    style.fill: "#fadbd8"
+    style.stroke: "#c0392b"
+    style.font-size: 10
+  }
+  begin -> insert
+  insert -> mock_email
+  mock_email -> update_status
+  update_status -> commit
+  insert -> tx_err: "error"
+  update_status -> tx_err: "error"
+  commit -> tx_err: "error"
+}
+ack_final: "d.Ack(false)\nlog.Info(\"notification processed\",\n  notification_id, event_type, correlation_id)" {
+  shape: rectangle
+  style.fill: "#d5f5e3"
+  style.stroke: "#1e8449"
+  style.font-size: 11
+  style.bold: true
+}
+###############################################################################
+# NOTIFICATION DB
+###############################################################################
+notif_db: "notification_db\n(PostgreSQL)" {
+  shape: cylinder
+  style.fill: "#e8f8f5"
+  style.stroke: "#148f77"
+  style.font-size: 13
+  style.bold: true
+}
+notifications_table: "notifications table" {
+  shape: sql_table
+  style.fill: "#d1f2eb"
+  id: "UUID PK DEFAULT gen_random_uuid()"
+  user_id: "UUID NOT NULL"
+  event_type: "TEXT NOT NULL"
+  payload: "JSONB NOT NULL"
+  status: "TEXT DEFAULT 'pending'"
+  created_at: "TIMESTAMPTZ DEFAULT now()"
+  sent_at: "TIMESTAMPTZ NULL"
+}
+idx_notif: "idx_notifications_user_created\nON notifications(user_id, created_at DESC)" {
+  shape: rectangle
+  style.fill: "#a9dfbf"
+  style.stroke: "#1e8449"
+  style.font-size: 10
+  style.italic: true
+}
+###############################################################################
+# HTTP HANDLER
+###############################################################################
+handler: NotificationHandler {
+  style.fill: "#fdf2e9"
+  style.stroke: "#ca6f1e"
+  style.border-radius: 8
+  h_fields: |md
+    **struct NotificationHandler**
+    - store NotificationRepository
+    - log   \*slog.Logger
+  | {
+    style.fill: "#fae5d3"
+    style.stroke: "#ca6f1e"
+    style.font-size: 12
+  }
+  list_notifs: "GET /notifications\nListNotifications(w, r)" {
+    shape: rectangle
+    style.fill: "#fad7a0"
+    style.stroke: "#ca6f1e"
+    style.font-size: 12
+    style.bold: true
+  }
+  jwt_extract: "claims, ok := auth.ClaimsFromContext(r.Context())\nif !ok → 401" {
+    shape: rectangle
+    style.fill: "#fdebd0"
+    style.stroke: "#e67e22"
+    style.font-size: 11
+  }
+  parse_params: "Parse query params:\n  after = r.URL.Query().Get(\"after\")\n  limit = r.URL.Query().Get(\"limit\")\n  default limit=20, max=50" {
+    shape: rectangle
+    style.fill: "#fdebd0"
+    style.stroke: "#e67e22"
+    style.font-size: 11
+  }
+  find_query: "store.FindByUserID(ctx,\n  userID=claims.Sub,\n  afterID, limit+1)" {
+    shape: rectangle
+    style.fill: "#fad7a0"
+    style.stroke: "#ca6f1e"
+    style.font-size: 11
+  }
+  sql_query: "SELECT id, user_id, event_type,\n  payload, status, created_at, sent_at\nFROM notifications\nWHERE user_id = \$1\n  [AND (created_at, id) < cursor]\nORDER BY created_at DESC, id DESC\nLIMIT \$2\n→ uses idx_notifications_user_created" {
+    shape: rectangle
+    style.fill: "#fef9e7"
+    style.stroke: "#b7950b"
+    style.font-size: 10
+  }
+  cursor_logic: "if len(rows)==limit+1:\n  nextCursor = rows[limit].ID\n  return rows[:limit]\nelse: nextCursor = \"\"" {
+    shape: rectangle
+    style.fill: "#fdebd0"
+    style.stroke: "#e67e22"
+    style.font-size: 10
+  }
+  h_response: "200 JSON\n{\n  notifications: [{id, event_type,\n    payload, status,\n    created_at, sent_at},...],\n  next_cursor: string|null\n}" {
+    shape: rectangle
+    style.fill: "#a9cce3"
+    style.stroke: "#2471a3"
+    style.font-size: 11
+    style.bold: true
+  }
+  h_fields -> list_notifs: "" { style.stroke-dash: 3 }
+  list_notifs -> jwt_extract
+  jwt_extract -> parse_params: "valid"
+  parse_params -> find_query
+  find_query -> sql_query
+  sql_query -> cursor_logic
+  cursor_logic -> h_response
+}
+###############################################################################
+# JWT MIDDLEWARE (applied to GET /notifications)
+###############################################################################
+jwt_mw: "auth.JWTMiddleware(JWT_SECRET)\nApplied to GET /notifications" {
+  shape: rectangle
+  style.fill: "#e8daef"
+  style.stroke: "#7d3c98"
+  style.font-size: 11
+  style.bold: true
+}
+###############################################################################
+# CONNECTIONS — AMQP INPUT
+###############################################################################
+rmq.k1 -> consumer.route_switch: "url.created"
+rmq.k2 -> consumer.route_switch: "url.deleted"
+rmq.k3 -> consumer.route_switch: "milestone.reached"
+consumer.route_switch -> branch_created.decode1: "url.created"
+consumer.route_switch -> branch_deleted.decode2: "url.deleted"
+consumer.route_switch -> branch_milestone.decode3: "milestone.reached"
+consumer.route_switch -> unknown_key: "other"
+branch_created.extract1 -> validate: "userID, userEmail, msg"
+branch_deleted.extract2 -> validate: "userID, userEmail, msg"
+branch_milestone.extract3 -> validate: "userID, userEmail, msg"
+validate -> tx_block.begin: "userID != \"\""
+validate -> ack_final: "userID == \"\"\n→ Ack [drop]" {
+  style.stroke: "#e74c3c"
+  style.stroke-dash: 4
+}
+tx_block.commit -> ack_final
+###############################################################################
+# CONNECTIONS — DB
+###############################################################################
+tx_block.insert -> notif_db: "INSERT\n(status='pending')" {
+  style.stroke: "#148f77"
+}
+tx_block.update_status -> notif_db: "UPDATE\n(status='sent')" {
+  style.stroke: "#148f77"
+}
+notif_db -> notifications_table: "contains" {
+  style.stroke-dash: 3
+  style.stroke: "#566573"
+}
+notifications_table -> idx_notif: "index" {
+  style.stroke-dash: 3
+  style.stroke: "#1e8449"
+}
+###############################################################################
+# CONNECTIONS — HTTP HANDLER
+###############################################################################
+http_client -> jwt_mw: "GET /notifications\nAuthorization: Bearer <jwt>"
+jwt_mw -> handler.list_notifs: "Claims injected\ninto context"
+handler.sql_query -> notif_db: "SELECT" {
+  style.stroke: "#e67e22"
+}
+###############################################################################
+# ANNOTATION
+###############################################################################
+note: |md
+  **Key Invariants**
+  - Single consumer goroutine, prefetch=1
+  - Every path through processDelivery calls d.Ack() or d.Nack()
+  - Poison messages (bad JSON, unknown key, missing user_id) → d.Ack(false) [drain, no requeue]
+  - DB errors (Begin/Insert/Update/Commit) → tx.Rollback() + d.Nack(false, requeue=true)
+  - INSERT + UPDATE in **single transaction** (status: pending → sent)
+  - mockEmail() = structured log line only; no network call
+  - GET /notifications: cursor-based pagination, JWT-protected, uses idx_notifications_user_created
+| {
+  near: bottom-center
+  style.fill: "#f2f3f4"
+  style.stroke: "#7f8c8d"
+  style.font-size: 11
+}

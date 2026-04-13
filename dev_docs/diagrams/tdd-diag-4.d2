@@ -1,0 +1,267 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+direction: right
+title: |md
+  ## RabbitMQ Exchange / Queue / Binding Topology
+  `url-shortener` broker — topic exchange, durable
+| {near: top-center}
+classes: {
+  exchange: {
+    style: {
+      fill: "#7C3AED"
+      font-color: white
+      bold: true
+      border-radius: 6
+      shadow: true
+    }
+  }
+  queue: {
+    style: {
+      fill: "#1D4ED8"
+      font-color: white
+      bold: true
+      border-radius: 4
+    }
+  }
+  service_producer: {
+    style: {
+      fill: "#065F46"
+      font-color: white
+      border-radius: 8
+      shadow: true
+    }
+  }
+  service_consumer: {
+    style: {
+      fill: "#1E40AF"
+      font-color: white
+      border-radius: 8
+      shadow: true
+    }
+  }
+  routing_key: {
+    style: {
+      fill: "#F59E0B"
+      font-color: "#1C1917"
+      border-radius: 12
+      stroke: "#D97706"
+      font-size: 11
+    }
+  }
+  declare_note: {
+    style: {
+      fill: "#FEF3C7"
+      font-color: "#92400E"
+      stroke: "#FCD34D"
+      border-radius: 6
+      font-size: 11
+    }
+  }
+}
+# ── Producers / Exchange Declarer ──────────────────────────────────────────────
+url_svc: "url-service\n(port 8081)" {
+  class: service_producer
+  shape: rectangle
+}
+url_svc_note: |md
+  **Declares:**\
+  exchange `url-shortener`\
+  (topic, durable)\
+  \
+  **Publishes:**\
+  `url.created`\
+  `url.clicked`\
+  `url.deleted`
+| {
+  class: declare_note
+  shape: rectangle
+}
+analytics_svc_pub: "analytics-service\n(port 8082)" {
+  class: service_producer
+  shape: rectangle
+}
+analytics_svc_pub_note: |md
+  **Publishes:**\
+  `milestone.reached`
+| {
+  class: declare_note
+  shape: rectangle
+}
+# ── Exchange ───────────────────────────────────────────────────────────────────
+exchange: "Exchange: \"url-shortener\"\ntype=topic  durable=true\nautoDelete=false" {
+  class: exchange
+  shape: rectangle
+  width: 320
+}
+# ── Routing key labels ─────────────────────────────────────────────────────────
+rk_created: "routing_key:\n\"url.created\"" {
+  class: routing_key
+}
+rk_clicked: "routing_key:\n\"url.clicked\"" {
+  class: routing_key
+}
+rk_deleted: "routing_key:\n\"url.deleted\"" {
+  class: routing_key
+}
+rk_milestone: "routing_key:\n\"milestone.reached\"" {
+  class: routing_key
+}
+# ── Queues ─────────────────────────────────────────────────────────────────────
+q_analytics: "Queue: \"analytics.clicks\"\ndurable=true" {
+  class: queue
+  shape: rectangle
+}
+q_analytics_note: |md
+  **Declared by:**\
+  analytics-service\
+  \
+  **Binding:**\
+  `url.clicked` → this queue
+| {
+  class: declare_note
+}
+q_notifications: "Queue: \"notifications.events\"\ndurable=true" {
+  class: queue
+  shape: rectangle
+}
+q_notifications_note: |md
+  **Declared by:**\
+  notification-service\
+  \
+  **Bindings (×3):**\
+  `url.created`\
+  `url.deleted`\
+  `milestone.reached`
+| {
+  class: declare_note
+}
+# ── Consumers ─────────────────────────────────────────────────────────────────
+analytics_consumer: "analytics-service\nconsumer\nprefetch=1" {
+  class: service_consumer
+}
+notification_consumer: "notification-service\nconsumer\nprefetch=1" {
+  class: service_consumer
+}
+# ── Connections: producers → exchange ─────────────────────────────────────────
+url_svc -> exchange: "DECLARE exchange\n(startup)" {
+  style: {
+    stroke: "#7C3AED"
+    stroke-width: 3
+    bold: true
+    stroke-dash: 0
+  }
+  target-arrowhead: {
+    shape: diamond
+    style.filled: true
+  }
+}
+url_svc_note -> url_svc: "" {
+  style.stroke-dash: 4
+  style.opacity: 0.6
+  style.stroke: "#92400E"
+}
+analytics_svc_pub -> exchange: "publish\nmilestone.reached" {
+  style: {
+    stroke: "#F59E0B"
+    stroke-width: 2
+    stroke-dash: 3
+  }
+}
+analytics_svc_pub_note -> analytics_svc_pub: "" {
+  style.stroke-dash: 4
+  style.opacity: 0.6
+  style.stroke: "#92400E"
+}
+# ── Exchange → routing key → queue bindings ───────────────────────────────────
+exchange -> rk_clicked: "" {
+  style.stroke: "#F59E0B"
+  style.stroke-width: 2
+}
+exchange -> rk_created: "" {
+  style.stroke: "#F59E0B"
+  style.stroke-width: 2
+}
+exchange -> rk_deleted: "" {
+  style.stroke: "#F59E0B"
+  style.stroke-width: 2
+}
+exchange -> rk_milestone: "" {
+  style.stroke: "#F59E0B"
+  style.stroke-width: 2
+}
+rk_clicked -> q_analytics: "bind" {
+  style: {
+    stroke: "#1D4ED8"
+    stroke-width: 3
+    bold: true
+  }
+}
+rk_created -> q_notifications: "bind" {
+  style: {
+    stroke: "#1D4ED8"
+    stroke-width: 3
+    bold: true
+  }
+}
+rk_deleted -> q_notifications: "bind" {
+  style: {
+    stroke: "#1D4ED8"
+    stroke-width: 3
+    bold: true
+  }
+}
+rk_milestone -> q_notifications: "bind" {
+  style: {
+    stroke: "#1D4ED8"
+    stroke-width: 3
+    bold: true
+  }
+}
+# ── Queue → consumer connections ──────────────────────────────────────────────
+q_analytics -> analytics_consumer: "AMQP Consume\nautoAck=false" {
+  style: {
+    stroke: "#065F46"
+    stroke-width: 2
+    animated: true
+  }
+}
+q_notifications -> notification_consumer: "AMQP Consume\nautoAck=false" {
+  style: {
+    stroke: "#065F46"
+    stroke-width: 2
+    animated: true
+  }
+}
+q_analytics_note -> q_analytics: "" {
+  style.stroke-dash: 4
+  style.opacity: 0.6
+  style.stroke: "#92400E"
+}
+q_notifications_note -> q_notifications: "" {
+  style.stroke-dash: 4
+  style.opacity: 0.6
+  style.stroke: "#92400E"
+}
+# ── Startup ordering annotation ───────────────────────────────────────────────
+startup_order: |md
+  **Startup declaration order (critical for message delivery):**
+  1. `url-service` starts → `ExchangeDeclare("url-shortener", topic, durable)` — idempotent
+  2. `analytics-service` starts → `QueueDeclare("analytics.clicks")` + `QueueBind(url.clicked)`
+  3. `notification-service` starts → `QueueDeclare("notifications.events")` + `QueueBind(×3)`
+  4. All declarations are **idempotent** — re-declaring with same params = no-op
+  5. Declaring with **different params** = AMQP error → fatal exit (caught at startup)
+  6. `docker-compose` `depends_on: rabbitmq: condition: service_healthy` gates all three
+| {
+  near: bottom-center
+  style: {
+    fill: "#F0FDF4"
+    stroke: "#16A34A"
+    stroke-width: 2
+    border-radius: 8
+    font-size: 12
+  }
+}

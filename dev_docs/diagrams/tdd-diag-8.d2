@@ -1,0 +1,221 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+
+direction: right
+
+title: |md
+  ## POST /register Data Flow
+  `user-service` · Module M2
+| {near: top-center}
+
+client: "HTTP Client" {
+  shape: rectangle
+  style.fill: "#E8F4FD"
+  style.stroke: "#2980B9"
+  style.font-size: 13
+}
+
+body: |md
+  **Request Body**
+  `Content-Type: application/json`
+  json
+  {
+    "email": "string",
+    "password": "string"
+  }
+  
+| {
+  near: top-left
+  style.font-size: 12
+}
+
+decode: "json.NewDecoder(r.Body)\n.Decode(&registerRequest{})" {
+  shape: rectangle
+  style.fill: "#EBF5FB"
+  style.stroke: "#2980B9"
+  style.font-size: 12
+  style.bold: true
+}
+
+validate: "validateEmail(req.Email)\n+\nvalidatePassword(req.Password)" {
+  shape: rectangle
+  style.fill: "#EBF5FB"
+  style.stroke: "#2980B9"
+  style.font-size: 12
+  style.bold: true
+}
+
+err400: "400 Bad Request" {
+  shape: rectangle
+  style.fill: "#FADBD8"
+  style.stroke: "#E74C3C"
+  style.font-size: 12
+  err400_body: |md
+    json
+    {
+      "error": "validation failed",
+      "field": "email/password"
+    }
+    
+  |
+}
+
+hasher: "PasswordHasher.Hash(req.Password)" {
+  shape: rectangle
+  style.fill: "#EBF5FB"
+  style.stroke: "#2980B9"
+  style.font-size: 12
+  style.bold: true
+  detail: |md
+    `bcrypt.GenerateFromPassword`
+    cost = 12
+    output: 60-char hash
+  |
+}
+
+err500_hash: "500 Internal Server Error" {
+  shape: rectangle
+  style.fill: "#FADBD8"
+  style.stroke: "#E74C3C"
+  style.font-size: 12
+}
+
+store: "UserRepository.Insert(ctx,\n  email, passwordHash)" {
+  shape: rectangle
+  style.fill: "#EBF5FB"
+  style.stroke: "#2980B9"
+  style.font-size: 12
+  style.bold: true
+  sql: |md
+    sql
+    INSERT INTO users
+      (email, password_hash)
+    VALUES ($1, $2)
+    RETURNING id, email, created_at
+    
+  |
+}
+
+pg_check: "pg error code == 23505?\n(unique_violation)" {
+  shape: diamond
+  style.fill: "#FEF9E7"
+  style.stroke: "#F39C12"
+  style.font-size: 12
+}
+
+err409: "409 Conflict" {
+  shape: rectangle
+  style.fill: "#FADBD8"
+  style.stroke: "#E74C3C"
+  style.font-size: 12
+  body409: |md
+    json
+    {"error": "email already registered"}
+    
+  |
+}
+
+err500_db: "500 Internal Server Error" {
+  shape: rectangle
+  style.fill: "#FADBD8"
+  style.stroke: "#E74C3C"
+  style.font-size: 12
+}
+
+response: "201 Created" {
+  shape: rectangle
+  style.fill: "#D5F5E3"
+  style.stroke: "#27AE60"
+  style.font-size: 12
+  style.bold: true
+  resp_body: |md
+    json
+    {
+      "user_id": "uuid-string",
+      "email":   "user@example.com"
+    }
+    
+  |
+}
+
+never: |md
+  ⛔ **`password_hash` NEVER appears in any response struct.**
+  `registerResponse` contains only `user_id` and `email`.
+  `req.Password` is never logged.
+| {
+  near: bottom-center
+  style.fill: "#FDEDEC"
+  style.stroke: "#C0392B"
+  style.font-size: 12
+  style.bold: true
+}
+
+client -> decode: "HTTP POST /register\n(io.Reader max 1 MiB)" {
+  style.stroke: "#2980B9"
+  style.font-size: 11
+}
+
+decode -> validate: "registerRequest struct" {
+  style.stroke: "#2980B9"
+  style.font-size: 11
+}
+
+decode -> err400: "error (malformed JSON)" {
+  style.stroke: "#E74C3C"
+  style.stroke-dash: 4
+  style.font-size: 11
+}
+
+validate -> err400: "validation error" {
+  style.stroke: "#E74C3C"
+  style.stroke-dash: 4
+  style.font-size: 11
+}
+
+validate -> hasher: "plaintext req.Password" {
+  style.stroke: "#2980B9"
+  style.font-size: 11
+}
+
+hasher -> err500_hash: "error (entropy failure)" {
+  style.stroke: "#E74C3C"
+  style.stroke-dash: 4
+  style.font-size: 11
+}
+
+hasher -> store: "bcrypt 60-char hash" {
+  style.stroke: "#2980B9"
+  style.font-size: 11
+}
+
+store -> pg_check: "*pgconn.PgError" {
+  style.stroke: "#F39C12"
+  style.font-size: 11
+}
+
+pg_check -> err409: "yes: Code 23505" {
+  style.stroke: "#E74C3C"
+  style.stroke-dash: 4
+  style.font-size: 11
+}
+
+pg_check -> err500_db: "no: other DB error" {
+  style.stroke: "#E74C3C"
+  style.stroke-dash: 4
+  style.font-size: 11
+}
+
+pg_check -> response: "no error" {
+  style.stroke: "#27AE60"
+  style.font-size: 11
+}
+
+response -> client: "JSON registerResponse" {
+  style.stroke: "#27AE60"
+  style.bold: true
+  style.font-size: 11
+}

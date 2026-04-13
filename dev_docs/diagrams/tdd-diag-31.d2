@@ -1,0 +1,250 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+title: |md
+  ## Redis Token Bucket Rate Limiter — INCR+EXPIRE Algorithm
+  `key = "rl:{route_bucket}:{client_ip}"` · Limits: shorten=10/min · redirect=300/min
+| {near: top-center}
+# ── INPUT ────────────────────────────────────────────────────────────────────
+incoming: "Incoming HTTP Request" {
+  shape: rectangle
+  style.fill: "#C7F1FF"
+  style.stroke: "#0077AA"
+  style.bold: true
+}
+# ── STEP 1: Build Key ─────────────────────────────────────────────────────────
+step1: |md
+  **Step 1 — Build Redis Key**
+  
+  route_bucket = match r.URL.Path:
+    HasPrefix("/api/shorten") → "shorten"
+    HasPrefix("/r/")          → "redirect"
+    _                         → "default"
+  ip = net.SplitHostPort(r.RemoteAddr)[0]
+  key = "rl:" + route_bucket + ":" + ip
+  
+  Examples:
+  - `"rl:shorten:10.0.0.1"`
+  - `"rl:redirect:10.0.0.1"`
+| {
+  shape: rectangle
+  style.fill: "#DEE1EB"
+  style.stroke: "#556"
+}
+# ── STEP 2: Redis Pipeline ────────────────────────────────────────────────────
+step2: |md
+  **Step 2 — Redis Pipeline (INCR + conditional EXPIRE)**
+  go
+  pipe := client.Pipeline()
+  incrCmd  := pipe.Incr(ctx, key)
+  // EXPIRE only if count==1 is checked AFTER exec
+  _, err := pipe.Exec(ctx)
+  
+  `Pipeline.Exec` sends INCR in one round-trip.
+  EXPIRE is sent in a **second** command
+  (see Step 3 — not batched; race is handled safely).
+| {
+  shape: rectangle
+  style.fill: "#DEE1EB"
+  style.stroke: "#556"
+}
+# ── STEP 3: Redis Error Check ─────────────────────────────────────────────────
+step3_err: "Step 3 — Redis Error?" {
+  shape: diamond
+  style.fill: "#FFF9C9"
+  style.stroke: "#997700"
+  style.bold: true
+}
+fail_open: |md
+  **FAIL-OPEN**
+  go
+  log.Warn("rate limit redis incr failed",
+    "key", key, "error", err)
+  return true, 0, err
+  // → request ALLOWED
+  // → no 429 returned
+  
+  Redis outage never causes
+  client-visible 5xx.
+| {
+  shape: rectangle
+  style.fill: "#FFE7CB"
+  style.stroke: "#CC6600"
+}
+# ── STEP 4: count == 1? ───────────────────────────────────────────────────────
+step4_first: "Step 4 — count == 1?\n(first request in window)" {
+  shape: diamond
+  style.fill: "#FFF9C9"
+  style.stroke: "#997700"
+  style.bold: true
+}
+step4_yes: |md
+  **Set EXPIRE (safe fallback)**
+  go
+  expErr := client.Expire(ctx, key,
+    time.Duration(windowSecs)*time.Second,
+  ).Err()
+  if expErr != nil {
+    log.Warn("redis expire failed",
+      "key", key, "error", expErr)
+    // non-fatal: key may persist without TTL
+    // but Redis restart resets it anyway
+  }
+  
+  **Why always set on count==1:**
+  Race condition — two goroutines
+  both see count==1 and both call
+  EXPIRE. This is harmless: both
+  set the same TTL. Key always gets
+  its TTL set.
+| {
+  shape: rectangle
+  style.fill: "#E8FFE8"
+  style.stroke: "#227722"
+}
+race_note: |md
+  ⚠ **Race Analysis (INCR≠atomic with EXPIRE)**
+  
+  Goroutine A: INCR key → 1
+  Goroutine B: INCR key → 2     ← B sees count=2, skips EXPIRE
+  Goroutine A: EXPIRE key 60    ← A sets TTL correctly
+  Result: key has TTL ✓ (A set it)
+  
+  If A crashes after INCR but before EXPIRE:
+  
+  Goroutine A: INCR key → 1  (CRASH before EXPIRE)
+  Result: key has NO TTL — persists forever
+  Mitigation: B's next request increments to 2;
+              no EXPIRE set by B either.
+              Key grows unbounded until Redis restart.
+  
+  **True fix:** use Lua script for atomicity.
+  **This project:** accepts the edge case
+  (Redis restart resets; single-gateway deploy).
+| {
+  shape: rectangle
+  style.fill: "#FFF0F0"
+  style.stroke: "#CC2222"
+  style.italic: true
+}
+# ── STEP 5: Limit Check ───────────────────────────────────────────────────────
+step5_limit: "Step 5 — count > limit?" {
+  shape: diamond
+  style.fill: "#FFF9C9"
+  style.stroke: "#997700"
+  style.bold: true
+}
+# ── OUTPUTS ───────────────────────────────────────────────────────────────────
+out_429: |md
+  **Return 429 Too Many Requests**
+  go
+  w.Header().Set("Retry-After",
+    strconv.Itoa(windowSecs))
+  writeError(w, 429,
+    "rate limit exceeded")
+  // Pipeline stops here;
+  // upstream NOT called
+  
+  Response headers:
+  `HTTP/1.1 429 Too Many Requests`
+  `Retry-After: 60`
+  `Content-Type: application/json`
+  `{"error":"rate limit exceeded"}`
+| {
+  shape: rectangle
+  style.fill: "#FFC8C8"
+  style.stroke: "#CC0000"
+  style.bold: true
+}
+out_allow: |md
+  **Allow — Call Upstream**
+  go
+  return true, 0, nil
+  // → next middleware / proxy
+  
+  Remaining capacity:
+  `limit - count` more requests
+  allowed in current window.
+| {
+  shape: rectangle
+  style.fill: "#C8FFC8"
+  style.stroke: "#006600"
+  style.bold: true
+}
+# ── LIMIT TABLE ───────────────────────────────────────────────────────────────
+limits_table: |'md
+  **Rate Limit Policy Table**
+  | `route_bucket` | Path Prefix     | Limit | Window | Redis Key Example              |
+  |----------------|-----------------|------:|-------:|--------------------------------|
+  | `shorten`      | `/api/shorten`  | 10    | 60s    | `rl:shorten:10.0.0.1`          |
+  | `redirect`     | `/r/`           | 300   | 60s    | `rl:redirect:10.0.0.1`         |
+  | `default`      | *(all others)*  | ∞     | —      | *(no Redis call)*              |
+  
+  Keys are **per-IP per-route-bucket**.
+  Different IPs have independent counters.
+'| {
+  shape: rectangle
+  style.fill: "#E4DBFE"
+  style.stroke: "#6633AA"
+  near: bottom-center
+}
+# ── KEY LIFECYCLE ─────────────────────────────────────────────────────────────
+key_lifecycle: |md
+  **Redis Key Lifecycle (60s window)**
+  
+  t=0s   INCR "rl:shorten:10.0.0.1" → 1  EXPIRE 60
+  t=5s   INCR → 2
+  t=10s  INCR → 3
+  ...
+  t=50s  INCR → 10   (last allowed)
+  t=55s  INCR → 11   (→ 429)
+  t=60s  key expires → deleted by Redis
+  t=61s  INCR → 1    (new window, fresh key)
+         EXPIRE 60   (TTL reset)
+  
+| {
+  shape: rectangle
+  style.fill: "#C7F1FF"
+  style.stroke: "#0077AA"
+}
+# ── CONNECTIONS ───────────────────────────────────────────────────────────────
+incoming -> step1: "HTTP request arrives"
+step1 -> step2: "key constructed\ne.g. \"rl:shorten:10.0.0.1\""
+step2 -> step3_err: "pipe.Exec(ctx)\nreturns (_, err)"
+step3_err -> fail_open: "err != nil\n(Redis down)" {
+  style.stroke: "#CC0000"
+  style.bold: true
+}
+step3_err -> step4_first: "err == nil\ncount = incrCmd.Val()" {
+  style.stroke: "#006600"
+  style.bold: true
+}
+step4_first -> step4_yes: "count == 1\n(first hit in window)" {
+  style.stroke: "#006600"
+  style.bold: true
+}
+step4_yes -> race_note: "illustrates\nrace condition" {
+  style.stroke-dash: 5
+  style.stroke: "#AA4400"
+}
+step4_first -> step5_limit: "count > 1\n(skip EXPIRE)" {
+  style.stroke: "#997700"
+}
+step4_yes -> step5_limit: "EXPIRE sent\n(or error logged)" {
+  style.stroke: "#006600"
+}
+step5_limit -> out_429: "count > limit\n(e.g. 11 > 10)" {
+  style.stroke: "#CC0000"
+  style.bold: true
+}
+step5_limit -> out_allow: "count ≤ limit\n(request proceeds)" {
+  style.stroke: "#006600"
+  style.bold: true
+}
+fail_open -> out_allow: "fail-open:\nallow request" {
+  style.stroke-dash: 5
+  style.stroke: "#CC6600"
+}

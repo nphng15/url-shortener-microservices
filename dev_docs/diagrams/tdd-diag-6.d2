@@ -1,0 +1,213 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+  }
+}
+
+direction: right
+
+title: |'md
+  ## pgxpool Connection Pool Configuration Data Flow
+  `DATABASE_URL` → Parse → Configure → Create → Ping → Ready / Fatal
+'| {near: top-center}
+
+env: "Environment" {
+  style.fill: "#e8e0f0"
+  style.stroke: "#7c4dbd"
+  style.border-radius: 6
+
+  DATABASE_URL: |'md
+    `DATABASE_URL`
+    e.g. `postgres://user:pass@host:5432/db`
+  '| {
+    style.fill: "#c3aee8"
+    style.stroke: "#7c4dbd"
+    style.font: mono
+  }
+}
+
+parse: "pgxpool.ParseConfig(databaseURL)" {
+  shape: rectangle
+  style.fill: "#dde8f5"
+  style.stroke: "#2c6fbf"
+  style.border-radius: 4
+  style.font: mono
+}
+
+cfg: "pgxpool.Config (Memory Layout)" {
+  style.fill: "#6f42c1" # Header=Purple
+  style.font-color: white
+  
+  host: "0x00: ConnConfig.Host" {
+    label.near: center-left
+    style.fill: "#007bff" # Data=Blue
+    style.font-color: white
+    style.font: mono
+  }
+  port: "0x08: ConnConfig.Port" {
+    style.fill: "#007bff"
+    style.font-color: white
+    style.font: mono
+  }
+  dbname: "0x10: ConnConfig.Database" {
+    style.fill: "#007bff"
+    style.font-color: white
+    style.font: mono
+  }
+  user: "0x18: ConnConfig.User" {
+    style.fill: "#007bff"
+    style.font-color: white
+    style.font: mono
+  }
+  max: "0x40: MaxConns = 10" {
+    style.fill: "#fd7e14" # Pointers/Config=Orange
+    style.font-color: white
+    style.font: mono
+  }
+  min: "0x44: MinConns = 2" {
+    style.fill: "#fd7e14"
+    style.font-color: white
+    style.font: mono
+  }
+  padding: "0x48: [Padding]" {
+    style.fill: "#6c757d" # Padding=Gray
+    style.font-color: white
+    style.font: mono
+  }
+}
+
+project_defaults: "Project defaults\n(NewDBPool settings)" {
+  style.fill: "#fff3cd"
+  style.stroke: "#c47d0e"
+  style.border-radius: 4
+  
+  note: |'md
+    go
+    cfg.MaxConns = 10
+    cfg.MinConns = 2
+    cfg.MaxConnLifetime = 1h
+    cfg.HealthCheckPeriod = 30s
+    
+  '|
+}
+
+new_pool: "pgxpool.NewWithConfig(ctx, cfg)" {
+  style.fill: "#dde8f5"
+  style.stroke: "#2c6fbf"
+  style.border-radius: 4
+  style.font: mono
+}
+
+pool: "*pgxpool.Pool (Runtime State)" {
+  style.fill: "#6f42c1"
+  style.font-color: white
+  style.bold: true
+  
+  conn1: "Slot 1: conn-1 (idle)" {
+    style.fill: "#007bff" # Data=Blue
+    style.font-color: white
+    style.font: mono
+  }
+  conn2: "Slot 2: conn-2 (idle)" {
+    style.fill: "#007bff"
+    style.font-color: white
+    style.font: mono
+  }
+  slot3: "Slots 3-10: [Free]" {
+    style.fill: "#28a745" # Free=Green
+    style.font-color: white
+    style.font: mono
+    style.stroke-dash: 4
+  }
+}
+
+ping: "pool.Ping(pingCtx)\ntimeout: 10s" {
+  style.fill: "#dde8f5"
+  style.stroke: "#2c6fbf"
+  style.border-radius: 4
+  style.font: mono
+}
+
+ok: "CONNECTED\nlog.Info + return pool" {
+  style.fill: "#d4edda"
+  style.stroke: "#1a7a4a"
+  style.border-radius: 6
+  style.font: mono
+}
+
+fatal: "FATAL\npool.Close() + Exit(1)" {
+  style.fill: "#f8d7da"
+  style.stroke: "#c0392b"
+  style.border-radius: 6
+  style.font: mono
+}
+
+parse_err: "PARSE_ERROR\nInvalid DSN + Exit(1)" {
+  style.fill: "#f8d7da"
+  style.stroke: "#c0392b"
+  style.border-radius: 6
+  style.font: mono
+}
+
+# ── Connections ───────────────────────────────────────────────────
+
+env.DATABASE_URL -> parse: "Raw DSN String" {
+  style.stroke: "#fd7e14" # Pointer/Source=Orange
+  style.stroke-width: 2
+}
+
+parse -> cfg: "success" {
+  style.stroke: "#28a745" # Success=Green
+}
+
+parse -> parse_err: "fail" {
+  style.stroke: "#c0392b"
+  style.stroke-dash: 4
+}
+
+project_defaults -> cfg.max: "overwrite" {
+  style.stroke: "#fd7e14"
+  style.stroke-dash: 3
+}
+
+cfg -> new_pool: "pass *pgxpool.Config" {
+  style.stroke: "#007bff"
+  style.bold: true
+}
+
+new_pool -> pool: "warm MinConns=2" {
+  style.stroke: "#007bff"
+}
+
+pool -> ping: "Acquire & SELECT 1" {
+  style.stroke: "#007bff"
+}
+
+ping -> ok: "ping success" {
+  style.stroke: "#28a745"
+  style.bold: true
+}
+
+ping -> fatal: "ping timeout" {
+  style.stroke: "#c0392b"
+  style.stroke-dash: 4
+}
+
+annotation: |'md
+  ### Pool Invariants (Intel Spec)
+  | Field | Value | Source |
+  | :--- | :--- | :--- |
+  | `MaxConns` | 10 | `NewDBPool` Hard-coded |
+  | `MinConns` | 2 | `NewDBPool` Hard-coded |
+  | `Ping timeout` | 10s | `context.WithTimeout` |
+
+  **Security Note:** 
+  Raw DSN is scrubbed via `maskDSN()` before logging. 
+  Credentials never enter the `stdout` stream.
+'| {
+  near: bottom-center
+  style.fill: "#f5f5f5"
+  style.stroke: "#aaaaaa"
+  style.border-radius: 6
+}

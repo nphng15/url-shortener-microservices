@@ -1,0 +1,230 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+direction: right
+title: |md
+  ## Redis Cache Entry Format and TTL Calculation
+  Key space: `url:{short_code}` — Value: JSON blob — TTL: computed per entry
+| {near: top-center}
+# ── Input Decision: does URL have expires_at? ────────────────────────────────
+input: "URL Record from PostgreSQL" {
+  shape: rectangle
+  style.fill: "#B5AFF6"
+  style.font-color: "#1a0040"
+  style.bold: true
+}
+expires_check: "expires_at IS NULL?" {
+  shape: diamond
+  style.fill: "#DEE1EB"
+  style.font-color: "#1a1a1a"
+}
+past_check: "expires_at - now() < 0?" {
+  shape: diamond
+  style.fill: "#DEE1EB"
+  style.font-color: "#1a1a1a"
+}
+# ── TTL computation paths ─────────────────────────────────────────────────────
+ttl_fixed: "TTL = 3600s\n(defaultCacheTTL)" {
+  shape: rectangle
+  style.fill: "#88DCF7"
+  style.font-color: "#00254d"
+  style.bold: true
+}
+ttl_min: "TTL = min(expires_at − now(), 3600s)" {
+  shape: rectangle
+  style.fill: "#88DCF7"
+  style.font-color: "#00254d"
+  style.bold: true
+}
+no_cache: "DO NOT CACHE\n→ return 410 from DB\n→ skip client.Set()" {
+  shape: rectangle
+  style.fill: "#ff9999"
+  style.font-color: "#5a0000"
+  style.bold: true
+}
+# ── Cache key and value format ────────────────────────────────────────────────
+key_format: "Redis Key\n`url:{short_code}`" {
+  shape: rectangle
+  style.fill: "#E4DBFE"
+  style.font-color: "#2d0060"
+  style.bold: true
+}
+value_format: |md
+  **Value: JSON string**
+  json
+  {
+    "original_url": "https://example.com/path",
+    "expires_at":   "2026-03-03T12:00:00Z",
+    "is_active":    true
+  }
+  
+  (`expires_at` omitted when null — `omitempty`)
+| {
+  shape: rectangle
+  style.fill: "#E4DBFE"
+  style.font-color: "#1a0040"
+}
+# ── Redis SET operation ───────────────────────────────────────────────────────
+set_op: "client.Set(ctx, key, jsonValue, ttl)" {
+  shape: rectangle
+  style.fill: "#C7F1FF"
+  style.font-color: "#00254d"
+  style.font: mono
+  style.bold: true
+}
+set_ctx: "ctx = context.WithTimeout\n(parent, 100ms)" {
+  shape: rectangle
+  style.fill: "#C7F1FF"
+  style.font-color: "#003d5c"
+}
+set_err: "err != nil?\n→ log.Warn(\"redis set failed\")\n→ return void\n(caller unaffected)" {
+  shape: rectangle
+  style.fill: "#ffe0b2"
+  style.font-color: "#5a2d00"
+}
+redis_store: "Redis\nurl:{code} = <json>" {
+  shape: cylinder
+  style.fill: "#f87171"
+  style.font-color: "#fff"
+  style.bold: true
+}
+# ── DEL on deactivate ─────────────────────────────────────────────────────────
+deactivate_trigger: "DELETE /urls/{code}\n→ DB UPDATE is_active=false\n→ tx committed" {
+  shape: rectangle
+  style.fill: "#B5AFF6"
+  style.font-color: "#1a0040"
+  style.bold: true
+}
+del_op: "client.Del(ctx, \"url:{code}\")" {
+  shape: rectangle
+  style.fill: "#C7F1FF"
+  style.font-color: "#00254d"
+  style.font: mono
+  style.bold: true
+}
+del_ctx: "ctx = context.WithTimeout\n(context.Background(), 200ms)\n⚠ NOT r.Context()\n(client may disconnect)" {
+  shape: rectangle
+  style.fill: "#C7F1FF"
+  style.font-color: "#003d5c"
+}
+del_err: "err != nil?\n→ log.Warn(\"redis del failed\")\n→ return void\n(204 already sent)" {
+  shape: rectangle
+  style.fill: "#ffe0b2"
+  style.font-color: "#5a2d00"
+}
+# ── GET read path ─────────────────────────────────────────────────────────────
+get_op: "client.Get(ctx, \"url:{code}\")" {
+  shape: rectangle
+  style.fill: "#C7F1FF"
+  style.font-color: "#00254d"
+  style.font: mono
+  style.bold: true
+}
+get_ctx: "ctx = context.WithTimeout\n(parent, 50ms)" {
+  shape: rectangle
+  style.fill: "#C7F1FF"
+  style.font-color: "#003d5c"
+}
+hit_path: "Cache HIT\n→ unmarshal CachedURL\n→ check IsActive + ExpiresAt\n→ 301 redirect" {
+  shape: rectangle
+  style.fill: "#bbf7d0"
+  style.font-color: "#003d1a"
+  style.bold: true
+}
+miss_path: "Cache MISS or err\n→ log.Warn (if err)\n→ fall through to DB" {
+  shape: rectangle
+  style.fill: "#fef9c3"
+  style.font-color: "#4a3a00"
+}
+# ── Annotations ──────────────────────────────────────────────────────────────
+note_invariants: |md
+  **Cache Invariants**
+  - Redis is NEVER authoritative
+  - All writes go to PostgreSQL first
+  - Cache misses always fall through to DB
+  - Deactivated URLs: DEL key, serve 410 from DB
+  - Expired URLs: serve 410 from DB, skip SET
+  - TTL never unbounded (max 3600s)
+| {
+  near: bottom-center
+  shape: rectangle
+  style.fill: "#f0f4ff"
+  style.font-color: "#1a1a4d"
+  style.stroke-dash: 4
+}
+# ── TTL formula detail ────────────────────────────────────────────────────────
+ttl_formula: |md
+  **computeTTL(expiresAt \*time.Time)**
+  
+  if expiresAt == nil:
+      return 3600s
+  remaining := time.Until(*expiresAt)
+  if remaining <= 0:
+      return 1s  ← guard; handler returns
+                    410 before reaching SET
+  if remaining < 3600s:
+      return remaining
+  return 3600s
+  
+| {
+  shape: rectangle
+  style.fill: "#f5f0ff"
+  style.font-color: "#2d0060"
+  style.stroke: "#B5AFF6"
+}
+# ── Connections: write / SET path ─────────────────────────────────────────────
+input -> expires_check: "evaluate"
+expires_check -> ttl_fixed: "YES (null)" {
+  style.stroke: "#2196F3"
+  style.bold: true
+}
+expires_check -> past_check: "NO (has value)" {
+  style.stroke: "#9C27B0"
+  style.bold: true
+}
+past_check -> no_cache: "YES (expired)" {
+  style.stroke: "#f44336"
+  style.bold: true
+}
+past_check -> ttl_min: "NO (future)" {
+  style.stroke: "#4CAF50"
+  style.bold: true
+}
+ttl_fixed -> key_format
+ttl_min -> key_format
+key_format -> value_format: "combined into"
+value_format -> set_op: "json.Marshal(CachedURL)"
+set_ctx -> set_op: "timeout context"
+set_op -> redis_store: "write"
+set_op -> set_err: "on error"
+ttl_formula -> ttl_min: "formula" {
+  style.stroke-dash: 4
+  style.stroke: "#9C27B0"
+}
+ttl_formula -> ttl_fixed: "formula" {
+  style.stroke-dash: 4
+  style.stroke: "#2196F3"
+}
+# ── Connections: DEL path ─────────────────────────────────────────────────────
+deactivate_trigger -> del_ctx: "post-commit"
+del_ctx -> del_op: "timeout context"
+del_op -> redis_store: "DEL key" {
+  style.stroke: "#f44336"
+  style.bold: true
+}
+del_op -> del_err: "on error"
+# ── Connections: GET read path ────────────────────────────────────────────────
+get_ctx -> get_op: "timeout context"
+get_op -> redis_store: "GET key" {
+  style.stroke: "#4CAF50"
+  style.stroke-dash: 3
+}
+get_op -> hit_path: "redis.Nil absent → found" {
+  style.stroke: "#4CAF50"
+}
+get_op -> miss_path: "redis.Nil or err" {
+  style.stroke: "#f44336"
+}

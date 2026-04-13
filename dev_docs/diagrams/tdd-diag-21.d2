@@ -1,0 +1,72 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+shape: sequence_diagram
+client: "Client\n(HTTP)"
+gw: "JWTMiddleware\n(shared/auth)"
+h: "DeleteURL\nHandler"
+db: "pgxURLStore\n(url_db)"
+tx: "pgx.Tx"
+cache: 'RedisCache\n(url:{code})'
+mq: "outbox table\n(url_db)"
+
+client -> gw: 'DELETE /urls/{code}\nAuthorization: Bearer <jwt>'
+gw -> gw: "VerifyToken(jwt)\nHMAC-SHA256 local"
+gw -> h: "r.Context() + Claims{Sub: user_id}"
+h -> db: 'FindByCode(ctx, code)\nSELECT id, user_id, short_code\nFROM urls WHERE short_code=$1'
+db -> h: 'URLRecord{ID, UserID, ShortCode}'
+
+not_found: "Row not found" {
+  h -> client: "404\n{\"error\":\"short url not found\"}" {
+    style.stroke: red
+  }
+}
+
+h -> h: "if urlRec.UserID ≠ claims.Sub"
+
+wrong_owner: "Wrong owner" {
+  h -> client: "403\n{\"error\":\"forbidden\"}" {
+    style.stroke: red
+  }
+}
+
+h -> db: "pool.Begin(ctx)"
+db -> tx: "BEGIN TRANSACTION"
+h -> tx: 'UPDATE urls SET is_active=false\nWHERE short_code=$1 AND user_id=$2'
+tx -> h: "rows affected = 1"
+h -> h: 'json.Marshal(URLDeletedEvent{\n  EventType: "url.deleted",\n  ShortCode, UserID, UserEmail,\n  CorrelationID, EventID: uuid\n})'
+h -> tx: 'INSERT INTO outbox\n(event_type, payload)\nVALUES ("url.deleted", $1)\nRETURNING id, created_at'
+tx -> h: "outbox row inserted"
+h -> tx: "COMMIT"
+tx -> h: "commit ok"
+
+h -> cache: 'Del(ctx_200ms, "url:{code}")\nRedis DEL url:{code}' {
+  style.stroke-dash: 4
+}
+
+cache_ok: "Redis DEL ok" {
+  cache -> h: "(void — error swallowed)" {
+    style.stroke-dash: 4
+  }
+}
+
+cache_fail: "Redis DEL fails" {
+  cache -> h: "error → log.Warn(\"redis del failed\")\nNOT propagated to caller" {
+    style.stroke: "#e67e22"
+    style.stroke-dash: 4
+  }
+}
+
+h -> client: '204 No Content\nX-Correlation-ID: {corrID}'
+
+note_atomicity: |md
+  **Transaction boundary**
+  UPDATE urls + INSERT outbox → single tx
+  Redis DEL is post-commit, best-effort
+  Redis failure: logged at Warn, 204 returned anyway
+| {
+  near: bottom-center
+}

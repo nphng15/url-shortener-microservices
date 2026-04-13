@@ -1,0 +1,954 @@
+direction: down
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 3
+  }
+}
+# ─────────────────────────────────────────────────────────────────
+# ROW 0: SHARED PACKAGES
+# ─────────────────────────────────────────────────────────────────
+row0: "" {
+  direction: right
+  style.stroke: transparent
+  style.fill: transparent
+  shared_events: {
+    direction: down
+    label: "SHARED  shared/events/events.go  [M1]"
+    style.fill: "#E8F4FD"
+    base_event: {
+      shape: sql_table
+      label: "struct BaseEvent"
+      EventType:     "string    | routing key literal"
+      OccurredAt:    "time.Time | UTC wall clock"
+      CorrelationID: "string    | X-Correlation-ID"
+      EventID:       "string    | UUID v4 dedup key"
+    }
+    url_created: {
+      shape: sql_table
+      label: "struct URLCreatedEvent"
+      BaseEvent:   "BaseEvent  | embedded"
+      ShortCode:   "string     | 7-char base62"
+      OriginalURL: "string     | validated http/https"
+      UserID:      "string     | UUID v4"
+      UserEmail:   "string     | denormalized"
+      ExpiresAt:   "*time.Time | omitempty"
+    }
+    url_clicked: {
+      shape: sql_table
+      label: "struct URLClickedEvent"
+      BaseEvent:  "BaseEvent  | embedded"
+      ShortCode:  "string     | 7-char base62"
+      IPHash:     "string     | SHA-256(ip+salt) 64-hex"
+      UserAgent:  "string     | raw header"
+      Referer:    "string     | omitempty"
+      ClickedAt:  "time.Time  | mirrors OccurredAt"
+    }
+    url_deleted: {
+      shape: sql_table
+      label: "struct URLDeletedEvent"
+      BaseEvent:  "BaseEvent | embedded"
+      ShortCode:  "string    | 7-char base62"
+      UserID:     "string    | UUID v4"
+      UserEmail:  "string    | denormalized"
+    }
+    milestone_reached: {
+      shape: sql_table
+      label: "struct MilestoneReachedEvent"
+      BaseEvent:   "BaseEvent | embedded"
+      ShortCode:   "string    | 7-char base62"
+      UserID:      "string    | UUID v4"
+      UserEmail:   "string    | denormalized"
+      MilestoneN:  "int       | 10|100|1000"
+      TotalClicks: "int64     | post-insert count"
+    }
+    consts: {
+      shape: sql_table
+      label: "EventType Constants  [M1]"
+      EventTypeURLCreated:       "string | url.created"
+      EventTypeURLClicked:       "string | url.clicked"
+      EventTypeURLDeleted:       "string | url.deleted"
+      EventTypeMilestoneReached: "string | milestone.reached"
+    }
+  }
+  shared_auth: {
+    direction: down
+    label: "SHARED  shared/auth/  [M2]"
+    style.fill: "#FFF3E0"
+    claims: {
+      shape: sql_table
+      label: "struct Claims  auth.go"
+      Sub:   "string | user UUID (jwt sub)"
+      Email: "string | denormalized"
+      Iss:   "string | url-shortener"
+      Iat:   "int64  | issued-at unix"
+      Exp:   "int64  | expiry unix"
+    }
+    token_issuer_iface: {
+      shape: class
+      label: "interface TokenIssuer  auth.go  [M2]"
+      +Issue(userID email string): "(string, time.Time, error)"
+      +Verify(tokenString string): "(*Claims, error)"
+    }
+    verify_token: {
+      shape: class
+      label: "func VerifyToken  auth.go  [M2]"
+      +VerifyToken(tokenString secret string): "(*Claims, error)"
+    }
+    jwt_middleware: {
+      shape: class
+      label: "JWTMiddleware  middleware.go  [M2]"
+      +JWTMiddleware(secret string): "func(Handler) Handler"
+      +ClaimsFromContext(ctx): "(*Claims, bool)"
+    }
+  }
+  shared_logger: {
+    direction: down
+    label: "SHARED  shared/logger/logger.go  [M1/M5]"
+    style.fill: "#F3E5F5"
+    logger_mod: {
+      shape: class
+      label: "package logger  [M1]"
+      +New(serviceName string): "*slog.Logger"
+      +WithCorrelationID(log, id): "*slog.Logger"
+      +CorrelationIDFromContext(ctx): "string"
+      +ContextWithCorrelationID(ctx, id): "context.Context"
+      +RequestLogger(log): "func(Handler) Handler"
+    }
+    response_writer: {
+      shape: sql_table
+      label: "struct responseWriter  logger.go  [M5]"
+      ResponseWriter: "http.ResponseWriter | embedded"
+      status:         "int                | captured code"
+    }
+  }
+}
+# ─────────────────────────────────────────────────────────────────
+# ROW 1: INFRASTRUCTURE (Postgres × 4, RabbitMQ, Redis)
+# ─────────────────────────────────────────────────────────────────
+row1: "" {
+  direction: right
+  style.stroke: transparent
+  style.fill: transparent
+  infra_db: {
+    direction: down
+    label: "INFRASTRUCTURE  docker-compose.yml  [M1]"
+    style.fill: "#E8F5E9"
+    url_db: {
+      shape: cylinder
+      label: "url_db  postgres:16  :5432\nurls + outbox tables  [M3]"
+    }
+    analytics_db: {
+      shape: cylinder
+      label: "analytics_db  postgres:16  :5433\nclicks + milestones + processed_events  [M4]"
+    }
+    user_db: {
+      shape: cylinder
+      label: "user_db  postgres:16  :5434\nusers table  [M2]"
+    }
+    notification_db: {
+      shape: cylinder
+      label: "notification_db  postgres:16  :5435\nnotifications table  [M5]"
+    }
+  }
+  infra_broker: {
+    direction: down
+    label: "MESSAGE BROKER  docker-compose.yml  [M1]"
+    style.fill: "#FFF8E1"
+    rabbitmq_node: {
+      shape: queue
+      label: "RabbitMQ 3.13  :5672/:15672\nexchange: url-shortener (topic, durable)"
+    }
+    queue_analytics: {
+      shape: sql_table
+      label: "Queue: analytics.clicks  [M1]"
+      binding: "url.clicked → analytics.clicks"
+    }
+    queue_notifications: {
+      shape: sql_table
+      label: "Queue: notifications.events  [M1]"
+      b1:    "url.created → notifications.events"
+      b2:    "url.deleted → notifications.events"
+      b3:    "milestone.reached → notifications.events"
+    }
+    rabbitmq_conn: {
+      shape: class
+      label: "struct RabbitMQConn  rabbitmq.go  [M1]"
+      +Conn:    "*amqp.Connection"
+      +Channel: "*amqp.Channel"
+      +NewRabbitMQConn(ctx url log, max int): "(*RabbitMQConn, error)"
+      +Close(): "void"
+    }
+  }
+  infra_cache: {
+    direction: down
+    label: "CACHE  docker-compose.yml  [M1]"
+    style.fill: "#FCE4EC"
+    redis_node: {
+      shape: cylinder
+      label: "Redis 7  :6379\nephemeral (--save '' --appendonly no)"
+    }
+    cached_url: {
+      shape: sql_table
+      label: "struct CachedURL  cache.go  [M3]"
+      ttl_note: "TTL = min(expires_at-now, 1h)"
+      OriginalURL: "string     | redirect target"
+      ExpiresAt:   "*time.Time | omitempty"
+      IsActive:    "bool       | soft-delete guard"
+      key_format:  "url:{short_code}"
+    }
+    redis_cache_cls: {
+      shape: class
+      label: "struct RedisCache  cache.go  [M3]"
+      -client: "*redis.Client"
+      -log:    "*slog.Logger"
+      +NewRedisCache(client, log): "*RedisCache"
+      +Get(ctx, code): "(*CachedURL, bool)"
+      +Set(ctx, code, cu, exp): "void"
+      +Del(ctx, code): "void"
+    }
+  }
+}
+# ─────────────────────────────────────────────────────────────────
+# ROW 2: USER SERVICE  :8083
+# ─────────────────────────────────────────────────────────────────
+row2: "" {
+  direction: right
+  style.stroke: transparent
+  style.fill: transparent
+  user_svc: {
+    direction: down
+    label: "USER SERVICE  services/user-service/  :8083  [M2]"
+    style.fill: "#E3F2FD"
+    user_config: {
+      shape: sql_table
+      label: "struct Config  config.go  [M2]"
+      DatabaseURL: "string        | required"
+      Port:        "string        | default 8080"
+      ServiceName: "string        | user-service"
+      JWTSecret:   "string        | required ≥32B"
+      BCryptCost:  "int           | default 12"
+      TokenTTL:    "time.Duration | default 24h"
+    }
+    users_table: {
+      shape: sql_table
+      label: "TABLE users  migration.sql  [M2]  user_db"
+      id:            "UUID        | PK DEFAULT gen_random_uuid()"
+      email:         "TEXT        | UNIQUE NOT NULL"
+      password_hash: "TEXT        | NOT NULL bcrypt 60-char"
+      created_at:    "TIMESTAMPTZ | NOT NULL DEFAULT now()"
+      idx:           "idx_users_email UNIQUE B-tree"
+    }
+    user_struct: {
+      shape: sql_table
+      label: "struct User  store.go  [M2]"
+      ID:           "string    | UUID"
+      Email:        "string"
+      PasswordHash: "string    | NEVER logged/returned"
+      CreatedAt:    "time.Time"
+    }
+    user_repo_iface: {
+      shape: class
+      label: "interface UserRepository  store.go  [M2]"
+      +Insert(ctx, email, hash): "(*User, error)"
+      +FindByEmail(ctx, email): "(*User, error)"
+    }
+    pgx_user_store: {
+      shape: class
+      label: "struct pgxUserStore  store.go  [M2]"
+      -pool: "*pgxpool.Pool"
+      +NewUserStore(pool): "UserRepository"
+      +Insert(ctx, email, hash): "(*User, error)"
+      +FindByEmail(ctx, email): "(*User, error)"
+    }
+    password_hasher_iface: {
+      shape: class
+      label: "interface PasswordHasher  password.go  [M2]"
+      +Hash(plaintext): "(string, error)"
+      +Verify(plain, hash): "error"
+    }
+    bcrypt_hasher: {
+      shape: class
+      label: "struct bcryptHasher  password.go  [M2]\ncost=12 ~280ms/op"
+      -cost: "int"
+      +NewPasswordHasher(cost): "PasswordHasher"
+      +Hash(plain): "(string, error)"
+      +Verify(plain, hash): "error"
+    }
+    jwt_issuer: {
+      shape: class
+      label: "struct jwtTokenIssuer  token.go  [M2]\nHS256, HMAC-SHA256"
+      -secret: "[]byte"
+      -ttl:    "time.Duration"
+      +NewTokenIssuer(secret, ttl): "TokenIssuer"
+      +Issue(userID, email): "(string, time.Time, error)"
+      +Verify(tokenString): "(*Claims, error)"
+    }
+    user_handler: {
+      shape: class
+      label: "struct Handler  handler.go  [M2]"
+      -store:  "UserRepository"
+      -hasher: "PasswordHasher"
+      -issuer: "TokenIssuer"
+      -log:    "*slog.Logger"
+      +NewHandler(store, hasher, issuer, log): "*Handler"
+      +Register(w, r): "void  POST /register → 201"
+      +Login(w, r): "void  POST /login → 200 timing-safe"
+      +Me(w, r): "void  GET /me → 200 no DB"
+    }
+    user_validate: {
+      shape: class
+      label: "validate.go  [M2]"
+      +validateEmail(email): "error  regexp ^[^@\\s]+@..."
+      +validatePassword(pw): "error  len>=8"
+    }
+    user_errors: {
+      shape: sql_table
+      label: "Sentinel Errors  errors.go  [M2]"
+      ErrDuplicateEmail: "errors.New → 409"
+      ErrUserNotFound:   "errors.New → 401 generic"
+      ErrPasswordMismatch: "errors.New → 401 generic"
+      ErrTokenInvalid:   "errors.New → 401"
+    }
+    user_http: {
+      shape: sql_table
+      label: "HTTP Schemas  handler.go  [M2]"
+      registerRequest:  "email string | password string"
+      registerResponse: "user_id string | email string"
+      loginRequest:     "email string | password string"
+      loginResponse:    "token string | expires_at RFC3339"
+      meResponse:       "user_id string | email string"
+    }
+  }
+}
+# ─────────────────────────────────────────────────────────────────
+# ROW 3: URL SERVICE  :8081
+# ─────────────────────────────────────────────────────────────────
+row3: "" {
+  direction: right
+  style.stroke: transparent
+  style.fill: transparent
+  url_svc: {
+    direction: down
+    label: "URL SERVICE  services/url-service/  :8081  [M1/M3]"
+    style.fill: "#E8EAF6"
+    url_config: {
+      shape: sql_table
+      label: "struct Config  config.go  [M3]"
+      DatabaseURL:        "string        | required"
+      RedisURL:           "string        | required env non-fatal"
+      RabbitMQURL:        "string        | required"
+      Port:               "string        | default 8080"
+      ServiceName:        "string        | url-service"
+      JWTSecret:          "string        | required"
+      ShortURLBase:       "string        | e.g. http://localhost:8080"
+      OutboxPollInterval: "time.Duration | default 2s"
+      OutboxWorkerCount:  "int           | fixed 3"
+    }
+    urls_table: {
+      shape: sql_table
+      label: "TABLE urls  migration.sql  [M3]  url_db"
+      id:           "UUID        | PK DEFAULT gen_random_uuid()"
+      short_code:   "VARCHAR(10) | UNIQUE NOT NULL"
+      original_url: "TEXT        | NOT NULL"
+      user_id:      "UUID        | NOT NULL"
+      created_at:   "TIMESTAMPTZ | NOT NULL DEFAULT now()"
+      expires_at:   "TIMESTAMPTZ | NULL = perpetual"
+      is_active:    "BOOLEAN     | NOT NULL DEFAULT true"
+      idx1:         "idx_urls_short_code UNIQUE B-tree"
+      idx2:         "idx_urls_user_id_created (user_id, created_at DESC)"
+    }
+    outbox_table: {
+      shape: sql_table
+      label: "TABLE outbox  migration.sql  [M3]  url_db"
+      id:           "UUID        | PK DEFAULT gen_random_uuid()"
+      event_type:   "TEXT        | routing key"
+      payload:      "JSONB       | full event JSON"
+      created_at:   "TIMESTAMPTZ | NOT NULL DEFAULT now()"
+      published_at: "TIMESTAMPTZ | NULL=unpublished"
+      idx:          "idx_outbox_unpublished partial WHERE published_at IS NULL"
+    }
+    url_record: {
+      shape: sql_table
+      label: "struct URLRecord  store.go  [M3]"
+      ID:          "string     | UUID"
+      ShortCode:   "string     | 7-char base62"
+      OriginalURL: "string"
+      UserID:      "string     | UUID"
+      CreatedAt:   "time.Time"
+      ExpiresAt:   "*time.Time | nil = perpetual"
+      IsActive:    "bool"
+    }
+    outbox_record: {
+      shape: sql_table
+      label: "struct OutboxRecord  outbox_store.go  [M3]"
+      ID:          "string     | UUID"
+      EventType:   "string     | routing key"
+      Payload:     "[]byte     | raw JSONB"
+      CreatedAt:   "time.Time"
+      PublishedAt: "*time.Time | nil=unpublished"
+    }
+    url_repo_iface: {
+      shape: class
+      label: "interface URLRepository  store.go  [M3]"
+      +Insert(ctx, rec): "(*URLRecord, error)"
+      +FindByCode(ctx, code): "(*URLRecord, error)"
+      +FindByUserID(ctx, uid, after, lim): "([]*URLRecord, string, error)"
+      +Deactivate(ctx, code, uid): "error"
+    }
+    outbox_repo_iface: {
+      shape: class
+      label: "interface OutboxRepository  outbox_store.go  [M3]"
+      +InsertWithURL(ctx, tx, url, out): "error"
+      +InsertEvent(ctx, tx, out): "error"
+      +FetchUnpublished(ctx, limit): "([]*OutboxRecord, error)"
+      +MarkPublished(ctx, id): "error"
+    }
+    base62: {
+      shape: class
+      label: "Base62  base62.go + codegen.go  [M3]\nalphabet: 0-9A-Za-z  62^7=3.5T codes"
+      +Encode(n *big.Int): "string  7-char left-padded"
+      +Decode(s string): "(*big.Int, error)"
+      +Generate(): "string  crypto/rand 8B mod 62^7"
+    }
+    publisher_iface: {
+      shape: class
+      label: "interface RabbitMQPublisher  publisher.go  [M3]"
+      +Publish(ctx, routingKey, body): "error"
+    }
+    amqp_publisher: {
+      shape: class
+      label: "struct amqpPublisher  publisher.go  [M3]\nsync.Mutex guards *amqp.Channel"
+      -mu:           "sync.Mutex"
+      -ch:           "*amqp.Channel"
+      -exchangeName: "string  url-shortener"
+      +NewRabbitMQPublisher(ch, log): "RabbitMQPublisher"
+      +Publish(ctx, key, body): "error  amqp.Persistent"
+    }
+    outbox_coord: {
+      shape: class
+      label: "struct OutboxCoordinator  outbox.go  [M3]\npoll every 2s, 3 workers, cap-50 chan"
+      -store:       "OutboxRepository"
+      -workerCh:    "chan *OutboxRecord  cap=50"
+      -log:         "*slog.Logger"
+      -interval:    "time.Duration  2s"
+      -workerCount: "int  3"
+      +NewOutboxCoordinator(deps): "*OutboxCoordinator"
+      +Run(ctx): "void  blocks; starts 3 workers"
+      -poll(ctx, ch): "void  FetchUnpublished(50)"
+      -runWorker(ctx, ch): "void  Publish→MarkPublished"
+    }
+    url_handler: {
+      shape: class
+      label: "struct Handler  handler.go  [M3]"
+      -urlStore:    "URLRepository"
+      -outboxStore: "OutboxRepository"
+      -cache:       "*RedisCache"
+      -codegen:     "*ShortCodeGenerator"
+      -pool:        "*pgxpool.Pool"
+      -cfg:         "*Config"
+      -log:         "*slog.Logger"
+      +NewHandler(deps): "*Handler"
+      +Shorten(w, r): "void  POST /shorten → 201 atomic tx"
+      +Redirect(w, r): "void  GET /{code} → 301 cache-through"
+      +ListURLs(w, r): "void  GET /urls → 200 cursor-paginated"
+      +DeleteURL(w, r): "void  DELETE /urls/{code} → 204 tx+cache"
+    }
+    url_errors: {
+      shape: sql_table
+      label: "Sentinel Errors  errors.go  [M3]"
+      ErrShortCodeConflict: "→ 409 / retry auto"
+      ErrURLNotFound:       "→ 404"
+      ErrNotOwner:          "→ 403"
+    }
+    url_validate: {
+      shape: class
+      label: "validate.go  [M3]"
+      +validateURL(raw): "error  http/https only"
+    }
+    corr_mw: {
+      shape: class
+      label: "Correlation Middleware  handler.go  [M3]"
+      +CorrelationIDMiddleware(next): "http.Handler"
+      +correlationIDFromContext(ctx): "string"
+      +newUUID(): "string  crypto/rand UUID v4"
+      +hashIP(remoteAddr): "string  SHA-256(ip+salt)"
+    }
+    url_http_schema: {
+      shape: sql_table
+      label: "HTTP Schemas  handler.go  [M3]"
+      shortenRequest:   "url string | custom_code *string | expires_at *string"
+      shortenResponse:  "short_code | short_url | original_url | expires_at"
+      urlListItem:      "short_code | original_url | created_at | expires_at | is_active"
+      urlListResponse:  "urls []urlListItem | next_cursor *string"
+    }
+  }
+}
+# ─────────────────────────────────────────────────────────────────
+# ROW 4: ANALYTICS SERVICE  :8082
+# ─────────────────────────────────────────────────────────────────
+row4: "" {
+  direction: right
+  style.stroke: transparent
+  style.fill: transparent
+  analytics_svc: {
+    direction: down
+    label: "ANALYTICS SERVICE  services/analytics-service/  :8082  [M1/M4]"
+    style.fill: "#F3E5F5"
+    analytics_config: {
+      shape: sql_table
+      label: "struct Config  config.go  [M4]"
+      DatabaseURL:       "string | required"
+      RabbitMQURL:       "string | required"
+      Port:              "string | default 8080"
+      ServiceName:       "string | analytics-service"
+      IPHashSalt:        "string | IP_HASH_SALT env"
+      AMQPPrefetchCount: "int    | fixed 1"
+    }
+    clicks_table: {
+      shape: sql_table
+      label: "TABLE clicks  migration.sql  [M4]  analytics_db"
+      id:         "UUID        | PK DEFAULT gen_random_uuid()"
+      short_code: "TEXT        | NOT NULL denormalized"
+      clicked_at: "TIMESTAMPTZ | NOT NULL"
+      ip_hash:    "TEXT        | NOT NULL SHA-256(ip+salt)"
+      user_agent: "TEXT        | NOT NULL DEFAULT ''"
+      referer:    "TEXT        | NULL partial index"
+      idx1:       "idx_clicks_short_code_time (short_code, clicked_at DESC)"
+      idx2:       "idx_clicks_referer partial WHERE referer IS NOT NULL"
+    }
+    milestones_table: {
+      shape: sql_table
+      label: "TABLE milestones  migration.sql  [M4]  analytics_db"
+      id:           "UUID        | PK"
+      short_code:   "TEXT        | NOT NULL"
+      milestone:    "INT         | 10|100|1000"
+      triggered_at: "TIMESTAMPTZ | NOT NULL DEFAULT now()"
+      uniq:         "UNIQUE(short_code, milestone)"
+      idx:          "idx_milestones_code_milestone UNIQUE"
+    }
+    processed_events_table: {
+      shape: sql_table
+      label: "TABLE processed_events  migration.sql  [M4]  analytics_db"
+      dedup_note: "deduplication by EventID"
+      event_id:     "TEXT        | PRIMARY KEY UUID v4 string"
+      processed_at: "TIMESTAMPTZ | NOT NULL DEFAULT now()"
+    }
+    click_record: {
+      shape: sql_table
+      label: "struct ClickRecord  store.go  [M4]"
+      ID:        "string    | UUID DB-gen"
+      ShortCode: "string"
+      ClickedAt: "time.Time"
+      IPHash:    "string    | 64-char hex from event"
+      UserAgent: "string"
+      Referer:   "string    | empty→NULL in DB"
+    }
+    click_repo_iface: {
+      shape: class
+      label: "interface ClickRepository  store.go  [M4]"
+      +Insert(ctx, tx, rec): "error"
+      +CountByCode(ctx, code): "(int64, error)"
+      +CountByCodeSince(ctx, code, since): "(int64, error)"
+      +TopReferers(ctx, code, n): "([]RefererCount, error)"
+      +TimelineBuckets(ctx, code, unit): "([]TimelinePoint, error)"
+    }
+    milestone_repo_iface: {
+      shape: class
+      label: "interface MilestoneRepository  store.go  [M4]"
+      +HasMilestone(ctx, tx, code, m): "(bool, error)"
+      +Insert(ctx, tx, code, m): "error  ON CONFLICT DO NOTHING"
+    }
+    dedup_repo_iface: {
+      shape: class
+      label: "interface DeduplicationRepository  store.go  [M4]"
+      +Exists(ctx, tx, eventID): "(bool, error)"
+      +Insert(ctx, tx, eventID): "error  ON CONFLICT DO NOTHING"
+    }
+    analytics_publisher_iface: {
+      shape: class
+      label: "interface AnalyticsPublisher  publisher.go  [M4]"
+      +PublishMilestone(ctx, evt): "error"
+    }
+    milestone_checker: {
+      shape: class
+      label: "struct MilestoneChecker  milestone.go  [M4]\nthresholds: [10, 100, 1000]"
+      -clickStore:     "ClickRepository"
+      -milestoneStore: "MilestoneRepository"
+      -publisher:      "AnalyticsPublisher"
+      -log:            "*slog.Logger"
+      +NewMilestoneChecker(deps): "*MilestoneChecker"
+      +CheckAndPublish(ctx, tx, code, uid, email, corr): "error"
+    }
+    click_consumer: {
+      shape: class
+      label: "struct ClickConsumer  consumer.go  [M4]\nprefetch=1 serial processing"
+      -conn:           "*RabbitMQConn"
+      -pool:           "*pgxpool.Pool"
+      -clickStore:     "ClickRepository"
+      -milestoneStore: "MilestoneRepository"
+      -dedupStore:     "DeduplicationRepository"
+      -checker:        "*MilestoneChecker"
+      -log:            "*slog.Logger"
+      -healthy:        "atomic.Bool"
+      +NewClickConsumer(deps): "*ClickConsumer"
+      +Run(ctx): "void  blocks goroutine"
+      -processDelivery(ctx, d): "void  tx: dedup→click→milestone"
+    }
+    stats_handler: {
+      shape: class
+      label: "struct StatsHandler  handler.go  [M4]\npublic endpoints no JWT"
+      -clickStore: "ClickRepository"
+      -log:        "*slog.Logger"
+      +NewStatsHandler(store, log): "*StatsHandler"
+      +Stats(w, r): "void  GET /stats/{code} errgroup×4"
+      +Timeline(w, r): "void  GET /stats/{code}/timeline"
+    }
+    analytics_http: {
+      shape: sql_table
+      label: "HTTP Schemas  handler.go  [M4]"
+      statsResponse:    "short_code | total_clicks | last_24h | last_7d | top_referers[]"
+      timelineResponse: "short_code | interval | points[]"
+      RefererCount:     "referer string | count int64"
+      TimelinePoint:    "period RFC3339 | clicks int64"
+    }
+  }
+}
+# ─────────────────────────────────────────────────────────────────
+# ROW 5: NOTIFICATION SERVICE  :8084  +  API GATEWAY  :8080
+# ─────────────────────────────────────────────────────────────────
+row5: "" {
+  direction: right
+  style.stroke: transparent
+  style.fill: transparent
+  notification_svc: {
+    direction: down
+    label: "NOTIFICATION SERVICE  services/notification-service/  :8084  [M1/M5]"
+    style.fill: "#E8F5E9"
+    notif_config: {
+      shape: sql_table
+      label: "struct Config  config.go  [M5]"
+      DatabaseURL: "string | required"
+      RabbitMQURL: "string | required"
+      Port:        "string | default 8080"
+      ServiceName: "string | notification-service"
+      JWTSecret:   "string | required"
+    }
+    notifications_table: {
+      shape: sql_table
+      label: "TABLE notifications  migration.sql  [M5]  notification_db"
+      id:         "UUID        | PK DEFAULT gen_random_uuid()"
+      user_id:    "UUID        | NOT NULL"
+      event_type: "TEXT        | NOT NULL routing key"
+      payload:    "JSONB       | NOT NULL full event"
+      status:     "TEXT        | NOT NULL DEFAULT sent"
+      created_at: "TIMESTAMPTZ | NOT NULL DEFAULT now()"
+      sent_at:    "TIMESTAMPTZ | NULL"
+      idx:        "idx_notifications_user_created (user_id, created_at DESC)"
+    }
+    notif_record: {
+      shape: sql_table
+      label: "struct NotificationRecord  store.go  [M5]"
+      ID:        "string     | UUID"
+      UserID:    "string     | UUID"
+      EventType: "string     | routing key"
+      Payload:   "[]byte     | raw JSONB"
+      Status:    "string     | pending|sent|failed"
+      CreatedAt: "time.Time"
+      SentAt:    "*time.Time | nil if pending"
+    }
+    notif_repo_iface: {
+      shape: class
+      label: "interface NotificationRepository  store.go  [M5]"
+      +Insert(ctx, rec): "(*NotificationRecord, error)"
+      +FindByUserID(ctx, uid, after, lim): "([]*NotificationRecord, string, error)"
+    }
+    notif_consumer: {
+      shape: class
+      label: "struct NotificationConsumer  consumer.go  [M5]\nprefetch=1, routes url.created/deleted/milestone"
+      -conn:  "*RabbitMQConn"
+      -pool:  "*pgxpool.Pool"
+      -store: "NotificationRepository"
+      -log:   "*slog.Logger"
+      +NewNotificationConsumer(deps): "*NotificationConsumer"
+      +Run(ctx): "void  blocks goroutine"
+      -processDelivery(ctx, d): "void  switch routingKey"
+    }
+    notif_handler: {
+      shape: class
+      label: "struct NotificationHandler  handler.go  [M5]\nGET /notifications JWT-protected"
+      -store: "NotificationRepository"
+      -log:   "*slog.Logger"
+      +NewNotificationHandler(store, log): "*NotificationHandler"
+      +ListNotifications(w, r): "void  cursor-paginated"
+    }
+    notif_http: {
+      shape: sql_table
+      label: "HTTP Schemas  handler.go  [M5]"
+      notificationItem:         "id | event_type | payload any | status | created_at | sent_at"
+      notificationListResponse: "notifications [] | next_cursor *string"
+    }
+  }
+  gateway_svc: {
+    direction: down
+    label: "API GATEWAY  gateway/  :8080  [M1/M5]"
+    style.fill: "#FFF3E0"
+    gw_config: {
+      shape: sql_table
+      label: "struct Config  config.go  [M5]"
+      URLServiceURL:          "string | required"
+      AnalyticsServiceURL:    "string | required"
+      UserServiceURL:         "string | required"
+      NotificationServiceURL: "string | required"
+      RedisURL:               "string | required"
+      JWTSecret:              "string | required"
+      Port:                   "string | default 8080"
+      ServiceName:            "string | gateway"
+      CBMaxFailures:          "int           | default 5"
+      CBOpenTimeout:          "time.Duration | default 30s"
+      CBFailureWindow:        "time.Duration | default 10s"
+      RateLimits:             "map[string]RateLimitConfig"
+    }
+    route_struct: {
+      shape: sql_table
+      label: "struct Route  router.go  [M5]"
+      Method:       "string | or empty=any"
+      PathPrefix:   "string | first-match wins"
+      Upstream:     "string | service name key"
+      StripPrefix:  "string | /api stripped before fwd"
+      RequiresAuth: "bool   | JWT gate"
+      RateLimitKey: "string | shorten|redirect|empty"
+    }
+    routing_table: {
+      shape: sql_table
+      label: "routingTable  router.go  [M5]"
+      r1: "POST /api/auth/register → user-service  auth=false"
+      r2: "POST /api/auth/login    → user-service  auth=false"
+      r3: "POST /api/shorten       → url-service   auth=true  rl=shorten(10/60s)"
+      r4: "GET  /api/urls          → url-service   auth=true"
+      r5: "DELETE /api/urls/       → url-service   auth=true"
+      r6: "GET  /r/               → url-service   auth=false rl=redirect(300/60s)"
+      r7: "GET  /api/stats/        → analytics     auth=false"
+      r8: "GET  /api/notifications → notification  auth=true"
+    }
+    circuit_breaker: {
+      shape: class
+      label: "struct CircuitBreaker  circuitbreaker.go  [M5]\nCLOSED→OPEN→HALF_OPEN→CLOSED"
+      -mu:              "sync.Mutex  ALL fields guarded"
+      -state:           "State  CLOSED|OPEN|HALF_OPEN"
+      -failures:        "int    consecutive failures"
+      -lastFailureTime: "time.Time"
+      -maxFailures:     "int    default 5"
+      -openTimeout:     "time.Duration  30s"
+      -failureWindow:   "time.Duration  10s"
+      +NewCircuitBreaker(max, open, win): "*CircuitBreaker"
+      +Do(ctx, upstream func() error): "error"
+      +ErrCircuitOpen: "errors.New → 503"
+    }
+    rate_limiter_iface: {
+      shape: class
+      label: "interface RateLimiter  ratelimit.go  [M5]\nRedis INCR+EXPIRE token bucket"
+      +Allow(ctx, key, limit, windowSecs): "(bool, int, error)"
+    }
+    redis_token_bucket: {
+      shape: class
+      label: "struct redisTokenBucket  ratelimit.go  [M5]\nkey: rl:{route}:{ip}  fail-open"
+      -client: "*redis.Client"
+      -log:    "*slog.Logger"
+      +NewRateLimiter(client, log): "RateLimiter"
+      +Allow(ctx, key, lim, win): "(bool, retryAfter int, error)"
+    }
+    upstream_proxy: {
+      shape: class
+      label: "struct UpstreamProxy  proxy.go  [M5]"
+      -proxy:    "*httputil.ReverseProxy"
+      -upstream: "string"
+      -log:      "*slog.Logger"
+      +NewUpstreamProxy(url, log, name): "(*UpstreamProxy, error)"
+      +ServeHTTP(w, r, strip, add): "void"
+    }
+    gateway_struct: {
+      shape: class
+      label: "struct Gateway  router.go  [M5]\nzero domain logic — pure routing"
+      -routes:       "[]Route"
+      -proxies:      "map[string]*UpstreamProxy"
+      -urlServiceCB: "*CircuitBreaker"
+      -rateLimiter:  "RateLimiter"
+      -jwtSecret:    "string"
+      -rateLimits:   "map[string]RateLimitConfig"
+      -log:          "*slog.Logger"
+      +ServeHTTP(w, r): "void  full pipeline"
+      -matchRoute(method, path): "*Route"
+      -verifyJWT(w, r): "(*Claims, bool)"
+    }
+    gw_middleware: {
+      shape: class
+      label: "middleware.go  [M5]"
+      +CorrelationIDMiddleware(next): "http.Handler"
+      +chain(h, mws): "http.Handler"
+      +GatewayJWTMiddleware(secret, log): "func(Handler) Handler"
+      +clientIP(r): "string  net.SplitHostPort"
+      +buildRateLimitKey(route, ip): "string  rl:{route}:{ip}"
+    }
+    gw_pipeline: {
+      shape: sql_table
+      label: "Request Pipeline Order  [M5]"
+      s1: "1. CorrelationIDMiddleware → generate/read X-Correlation-ID"
+      s2: "2. RequestLogger → capture status + duration_ms"
+      s3: "3. Router.matchRoute → first prefix match"
+      s4: "4. [auth] GatewayJWTMiddleware → 401 on fail"
+      s5: "5. [rl] RateLimiter.Allow → 429 + Retry-After"
+      s6: "6. Forward X-Correlation-ID header upstream"
+      s7: "7. [url-svc] CircuitBreaker.Do → 503 if OPEN"
+      s8: "8. UpstreamProxy.ServeHTTP → path rewrite + forward"
+    }
+  }
+}
+# ─────────────────────────────────────────────────────────────────
+# ROW 6: DB POOL FACTORY (shared pattern all services)
+# ─────────────────────────────────────────────────────────────────
+row6: "" {
+  direction: right
+  style.stroke: transparent
+  style.fill: transparent
+  db_pool_factory: {
+    direction: down
+    label: "DB CONNECTION FACTORY  db.go  (all services)  [M1]"
+    style.fill: "#FAFAFA"
+    db_pool_cls: {
+      shape: class
+      label: "func NewDBPool  db.go  [M1]\nMaxConns=10 MinConns=2  ping 10s timeout"
+      +NewDBPool(ctx, dbURL, log): "(*pgxpool.Pool, error)"
+    }
+    health_handler_cls: {
+      shape: class
+      label: "func NewHealthHandler  health.go  [M1]\npre-encoded JSON  GET /health → 200"
+      +NewHealthHandler(serviceName): "http.HandlerFunc"
+    }
+    health_response: {
+      shape: sql_table
+      label: "struct HealthResponse  health.go  [M1]"
+      Status:  "string | always ok"
+      Service: "string | service name constant"
+    }
+    redis_factory: {
+      shape: class
+      label: "func NewRedisClient  redis.go  url-service only  [M1]\nnon-fatal: warn+continue if unreachable"
+      +NewRedisClient(ctx, url, log): "(*redis.Client, bool)"
+    }
+  }
+  startup_sequences: {
+    direction: down
+    label: "STARTUP SEQUENCES  main.go  (per service)  [M1-M5]"
+    style.fill: "#FAFAFA"
+    url_startup: {
+      shape: sql_table
+      label: "url-service startup  [M3]"
+      s1: "1. loadConfig() → fatal missing env"
+      s2: "2. logger.New()"
+      s3: "3. NewDBPool() → fatal"
+      s4: "4. runMigrations() → fatal"
+      s5: "5. NewRedisClient() → warn+continue"
+      s6: "6. NewRabbitMQConn(max=10) → fatal"
+      s7: "7. Construct stores+codegen+cache+publisher"
+      s8: "8. go OutboxCoordinator.Run(appCtx)"
+      s9: "9. mux register routes"
+      s10: "10. srv.ListenAndServe()"
+    }
+    analytics_startup: {
+      shape: sql_table
+      label: "analytics-service startup  [M4]"
+      s1: "1. loadConfig() → fatal"
+      s2: "2-4. DB + migrations → fatal"
+      s3: "5. NewRabbitMQConn() → fatal"
+      s4: "6. DeclareAnalyticsQueue() → fatal"
+      s5: "7. Construct stores+checker+consumer"
+      s6: "8. go consumer.Run(ctx)"
+      s7: "9. mux + srv.ListenAndServe()"
+    }
+    user_startup: {
+      shape: sql_table
+      label: "user-service startup  [M2]"
+      s1: "1. loadConfig() → fatal (DB+JWT required)"
+      s2: "2. logger.New()"
+      s3: "3. NewDBPool() → fatal"
+      s4: "4. runMigrations() → fatal"
+      s5: "5. Construct store+hasher+issuer+handler"
+      s6: "6. mux: POST/register, POST/login, GET/me"
+      s7: "7. srv.ListenAndServe()"
+    }
+    notif_startup: {
+      shape: sql_table
+      label: "notification-service startup  [M5]"
+      s1: "1. loadConfig() → fatal (DB+MQ+JWT)"
+      s2: "2-4. DB + migrations → fatal"
+      s3: "5. NewRabbitMQConn() → fatal"
+      s4: "6. DeclareNotificationQueue() → fatal"
+      s5: "7. go consumer.Run(ctx)"
+      s6: "8. GET /notifications [JWTMiddleware]"
+    }
+    gw_startup: {
+      shape: sql_table
+      label: "gateway startup  [M5]"
+      s1: "1. loadConfig() → fatal (all 6 URLs+JWT)"
+      s2: "2. Redis client → warn+continue"
+      s3: "3. NewUpstreamProxy × 4"
+      s4: "4. NewCircuitBreaker(5, 30s, 10s)"
+      s5: "5. NewRateLimiter(redisClient)"
+      s6: "6. chain(gw, RequestLogger, CorrIDMW)"
+      s7: "7. srv.ListenAndServe()"
+    }
+  }
+}
+# ─────────────────────────────────────────────────────────────────
+# MILESTONE INDEX
+# ─────────────────────────────────────────────────────────────────
+milestone_index: {
+  shape: sql_table
+  label: "Milestone Index"
+  m1: "M1 | url-shortener-m1 | Foundation: repo layout, shared contracts, local dev stack"
+  m2: "M2 | url-shortener-m2 | User Service: registration, login, JWT issuance"
+  m3: "M3 | url-shortener-m3 | URL Service: shorten, redirect, CRUD + outbox event publishing"
+  m4: "M4 | url-shortener-m4 | Analytics Service: click ingestion + stats API"
+  m5: "M5 | url-shortener-m5 | Notification Service + API Gateway + Circuit Breaker"
+}
+milestone_index.near: bottom-right
+# ─────────────────────────────────────────────────────────────────
+# CROSS-ROW EDGES: Shared packages → services
+# ─────────────────────────────────────────────────────────────────
+row0.shared_auth -> row2.user_svc: "implements TokenIssuer"
+row0.shared_auth -> row3.url_svc: "JWTMiddleware"
+row0.shared_auth -> row4.analytics_svc: "shared/auth import"
+row0.shared_auth -> row5.notification_svc: "JWTMiddleware"
+row0.shared_auth -> row5.gateway_svc: "VerifyToken local"
+row0.shared_events -> row3.url_svc: "URLCreatedEvent | URLClickedEvent"
+row0.shared_events -> row4.analytics_svc: "URLClickedEvent"
+row0.shared_events -> row5.notification_svc: "URLCreatedEvent | URLDeletedEvent | MilestoneReachedEvent"
+row0.shared_logger -> row2.user_svc: "*slog.Logger"
+row0.shared_logger -> row3.url_svc: "*slog.Logger"
+row0.shared_logger -> row4.analytics_svc: "*slog.Logger"
+row0.shared_logger -> row5.notification_svc: "*slog.Logger"
+row0.shared_logger -> row5.gateway_svc: "RequestLogger middleware"
+# Infra → Services
+row1.infra_db.url_db -> row3.url_svc: "pgxpool  urls+outbox"
+row1.infra_db.analytics_db -> row4.analytics_svc: "pgxpool  clicks+milestones"
+row1.infra_db.user_db -> row2.user_svc: "pgxpool  users"
+row1.infra_db.notification_db -> row5.notification_svc: "pgxpool  notifications"
+row1.infra_broker.rabbitmq_node -> row3.url_svc: "AMQP publish"
+row1.infra_broker.queue_analytics -> row4.analytics_svc: "consume url.clicked"
+row1.infra_broker.queue_notifications -> row5.notification_svc: "consume url.created|deleted|milestone"
+row1.infra_cache.redis_node -> row3.url_svc: "read-through cache"
+row1.infra_cache.redis_node -> row5.gateway_svc: "rate limit INCR+EXPIRE"
+# Service event flow (async via outbox → RabbitMQ)
+row3.url_svc -> row1.infra_broker.rabbitmq_node: "URLCreatedEvent | URLClickedEvent | URLDeletedEvent"
+row4.analytics_svc -> row1.infra_broker.rabbitmq_node: "MilestoneReachedEvent"
+# Gateway → Services (proxy)
+row5.gateway_svc -> row2.user_svc: "proxy /api/auth/*"
+row5.gateway_svc -> row3.url_svc: "proxy /api/shorten /r/* /api/urls  CB"
+row5.gateway_svc -> row4.analytics_svc: "proxy /api/stats/*"
+row5.gateway_svc -> row5.notification_svc: "proxy /api/notifications"
+# DB pool factory used by all
+row6.db_pool_factory -> row2.user_svc: "NewDBPool"
+row6.db_pool_factory -> row3.url_svc: "NewDBPool + NewRedisClient"
+row6.db_pool_factory -> row4.analytics_svc: "NewDBPool"
+row6.db_pool_factory -> row5.notification_svc: "NewDBPool"

@@ -1,0 +1,330 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+direction: right
+title: |md
+  ## Outbox Worker Pool Architecture and Data Flow
+  `OutboxCoordinator` + 3 `OutboxWorker` goroutines · buffered channel cap=50
+| {near: top-center}
+##############################################################################
+# url_db — outbox table
+##############################################################################
+url_db: "url_db (PostgreSQL)" {
+  style.fill: "#1a1a2e"
+  style.stroke: "#4a4a8a"
+  style.font-color: white
+  style.border-radius: 6
+  outbox_table: "outbox table" {
+    shape: sql_table
+    style.fill: "#16213e"
+    style.font-color: white
+    id: "UUID · PK"
+    event_type: "TEXT · routing key"
+    payload: "JSONB · event JSON"
+    created_at: "TIMESTAMPTZ · NOT NULL"
+    published_at: "TIMESTAMPTZ · NULL = unpublished"
+  }
+  idx: |md
+    **idx_outbox_unpublished**
+    `ON outbox(created_at ASC)`
+    `WHERE published_at IS NULL`
+  | {
+    style.fill: "#0f3460"
+    style.font-color: "#a0c4ff"
+    style.border-radius: 4
+  }
+}
+##############################################################################
+# RabbitMQ exchange
+##############################################################################
+rmq: "RabbitMQ Broker" {
+  style.fill: "#1e3a1e"
+  style.stroke: "#4a8a4a"
+  style.font-color: white
+  style.border-radius: 6
+  exchange: "Exchange: url-shortener\n(topic · durable)" {
+    shape: hexagon
+    style.fill: "#2d5a2d"
+    style.font-color: "#90ee90"
+  }
+  q_analytics: "analytics.clicks" {
+    shape: queue
+    style.fill: "#1a3a1a"
+    style.font-color: "#90ee90"
+  }
+  q_notifications: "notifications.events" {
+    shape: queue
+    style.fill: "#1a3a1a"
+    style.font-color: "#90ee90"
+  }
+  exchange -> q_analytics: "url.clicked" {
+    style.stroke: "#90ee90"
+    style.stroke-dash: 3
+  }
+  exchange -> q_notifications: "url.created\nurl.deleted\nmilestone.reached" {
+    style.stroke: "#90ee90"
+    style.stroke-dash: 3
+  }
+}
+##############################################################################
+# OutboxCoordinator goroutine
+##############################################################################
+coordinator: "OutboxCoordinator\n(1 goroutine)" {
+  style.fill: "#2d1b4e"
+  style.stroke: "#7b4fa6"
+  style.font-color: white
+  style.border-radius: 8
+  style.shadow: true
+  ticker: "time.NewTicker\n(interval = 2s)" {
+    shape: oval
+    style.fill: "#3d2060"
+    style.font-color: "#d0aaff"
+  }
+  poll_fn: "poll(ctx, workerCh)" {
+    style.fill: "#4a2870"
+    style.font-color: white
+    style.border-radius: 4
+  }
+  fetch_sql: |go
+    SELECT id, event_type, payload, created_at
+    FROM outbox
+    WHERE published_at IS NULL
+    ORDER BY created_at ASC
+    LIMIT 50
+    FOR UPDATE SKIP LOCKED
+  | {
+    style.fill: "#1a0a30"
+    style.font-color: "#c8a8ff"
+    style.border-radius: 4
+  }
+  ctx_done: "case <-ctx.Done()\nclose(workerCh)\nwg.Wait()\nreturn" {
+    style.fill: "#5a1a1a"
+    style.font-color: "#ffaaaa"
+    style.border-radius: 4
+    style.italic: true
+  }
+  ticker -> poll_fn: "every 2s\ncase <-ticker.C" {
+    style.stroke: "#7b4fa6"
+    style.animated: true
+  }
+  poll_fn -> fetch_sql: "executes" {
+    style.stroke: "#9b6fc6"
+  }
+}
+##############################################################################
+# Buffered channel
+##############################################################################
+worker_ch: "workerCh\nchan *OutboxRecord\ncap = 50" {
+  shape: queue
+  style.fill: "#1a2a4a"
+  style.stroke: "#4a7aaa"
+  style.font-color: "#88ccff"
+  style.bold: true
+  width: 220
+}
+cap_note: |md
+  **Buffer prevents coordinator blocking:**
+  Coordinator sends up to 50 rows per poll cycle.
+  Workers consume concurrently. If all 3 workers
+  are busy, coordinator blocks only when channel
+  is full (cap=50 ensures this is rare in practice).
+| {
+  near: top-right
+  style.fill: "#0a1a2a"
+  style.font-color: "#6aaae8"
+  style.border-radius: 4
+  style.italic: true
+}
+##############################################################################
+# 3 OutboxWorker goroutines
+##############################################################################
+workers: "OutboxWorker × 3\n(goroutines)" {
+  style.fill: "#1a2a1a"
+  style.stroke: "#4a8a4a"
+  style.font-color: white
+  style.border-radius: 8
+  style.shadow: true
+  w1: "Worker-1\nfor row := range workerCh" {
+    style.fill: "#2a3a2a"
+    style.font-color: "#aaffaa"
+    style.border-radius: 4
+  }
+  w2: "Worker-2\nfor row := range workerCh" {
+    style.fill: "#2a3a2a"
+    style.font-color: "#aaffaa"
+    style.border-radius: 4
+  }
+  w3: "Worker-3\nfor row := range workerCh" {
+    style.fill: "#2a3a2a"
+    style.font-color: "#aaffaa"
+    style.border-radius: 4
+  }
+}
+##############################################################################
+# Success path sub-steps
+##############################################################################
+publish_step: "amqpPublisher.Publish(\n  routingKey = row.EventType,\n  body = row.Payload,\n  DeliveryMode = Persistent\n)" {
+  style.fill: "#1a3a2a"
+  style.stroke: "#4a8a5a"
+  style.font-color: "#aaffcc"
+  style.border-radius: 6
+}
+mark_step: 'outboxStore.MarkPublished(\n  id = row.ID\n)\nUPDATE outbox\nSET published_at = now()\nWHERE id = $1' {
+  style.fill: "#1a3a2a"
+  style.stroke: "#4a8a5a"
+  style.font-color: "#aaffcc"
+  style.border-radius: 6
+}
+##############################################################################
+# Failure path
+##############################################################################
+fail_path: "Publish FAILED" {
+  style.fill: "#3a1a1a"
+  style.stroke: "#aa4444"
+  style.font-color: "#ffaaaa"
+  style.border-radius: 6
+  fail_log: "log.Warn(\n  outbox_id = row.ID,\n  event_type = row.EventType,\n  error = err\n)" {
+    style.fill: "#4a1a1a"
+    style.font-color: "#ffcccc"
+    style.border-radius: 4
+  }
+  skip_mark: "skip MarkPublished\npublished_at stays NULL\n→ row re-fetched next poll\n→ at-least-once guaranteed" {
+    style.fill: "#4a1a1a"
+    style.font-color: "#ff8888"
+    style.border-radius: 4
+    style.italic: true
+  }
+  fail_log -> skip_mark {
+    style.stroke: "#aa4444"
+    style.stroke-dash: 4
+  }
+}
+##############################################################################
+# Graceful shutdown
+##############################################################################
+shutdown: "Graceful Shutdown\n(ctx cancelled by SIGTERM)" {
+  style.fill: "#2a2a1a"
+  style.stroke: "#8a8a3a"
+  style.font-color: "#ffffaa"
+  style.border-radius: 6
+  style.italic: true
+  seq: |md
+    1. `appCancel()` → ctx.Done() fires
+    2. Coordinator: `close(workerCh)`
+    3. Workers: `range workerCh` exits on close
+    4. Workers finish in-flight publishes
+    5. Coordinator: `wg.Wait()` returns
+    6. `srv.Shutdown()` → `mq.Close()` → `pool.Close()`
+  | {
+    style.fill: "#1a1a0a"
+    style.font-color: "#ddddaa"
+    style.border-radius: 4
+  }
+}
+##############################################################################
+# Connections — Coordinator ↔ DB (fetch unpublished)
+##############################################################################
+url_db.outbox_table -> coordinator.fetch_sql: "SELECT · FOR UPDATE SKIP LOCKED\n(partial index: published_at IS NULL)" {
+  style.stroke: "#7b4fa6"
+  style.stroke-width: 2
+}
+##############################################################################
+# Coordinator → buffered channel
+##############################################################################
+coordinator.fetch_sql -> worker_ch: "for each row:\nworkerCh <- row\n(blocks only if cap=50 full)" {
+  style.stroke: "#4a7aaa"
+  style.stroke-width: 3
+  style.animated: true
+}
+##############################################################################
+# Buffered channel → Workers
+##############################################################################
+worker_ch -> workers.w1: "row := <-workerCh" {
+  style.stroke: "#4a8a4a"
+  style.stroke-width: 2
+  style.animated: true
+}
+worker_ch -> workers.w2: "row := <-workerCh" {
+  style.stroke: "#4a8a4a"
+  style.stroke-width: 2
+  style.animated: true
+}
+worker_ch -> workers.w3: "row := <-workerCh" {
+  style.stroke: "#4a8a4a"
+  style.stroke-width: 2
+  style.animated: true
+}
+##############################################################################
+# Workers → Publish step
+##############################################################################
+workers.w1 -> publish_step: "publishCtx\n5s timeout" {
+  style.stroke: "#4a8a5a"
+  style.stroke-width: 2
+}
+workers.w2 -> publish_step {
+  style.stroke: "#4a8a5a"
+  style.stroke-width: 2
+}
+workers.w3 -> publish_step {
+  style.stroke: "#4a8a5a"
+  style.stroke-width: 2
+}
+##############################################################################
+# Publish → RabbitMQ (success)
+##############################################################################
+publish_step -> rmq.exchange: "PublishWithContext(\n  exchange='url-shortener',\n  routingKey=row.EventType,\n  DeliveryMode=Persistent\n)" {
+  style.stroke: "#90ee90"
+  style.stroke-width: 3
+  style.animated: true
+}
+##############################################################################
+# Publish success → MarkPublished
+##############################################################################
+publish_step -> mark_step: "err == nil\n(success path)" {
+  style.stroke: "#4a8a5a"
+  style.stroke-width: 2
+}
+##############################################################################
+# MarkPublished → DB update
+##############################################################################
+mark_step -> url_db.outbox_table: 'UPDATE outbox\nSET published_at = now()\nWHERE id = $1' {
+  style.stroke: "#7b4fa6"
+  style.stroke-width: 2
+}
+##############################################################################
+# Publish failure path
+##############################################################################
+publish_step -> fail_path: "err != nil\n(AMQP error / timeout)" {
+  style.stroke: "#aa4444"
+  style.stroke-width: 2
+  style.stroke-dash: 5
+}
+##############################################################################
+# Shutdown signal
+##############################################################################
+coordinator.ctx_done -> shutdown: "ctx.Done()" {
+  style.stroke: "#8a8a3a"
+  style.stroke-dash: 4
+}
+
+explanation: |'md
+  yaml
+  deploy_source:
+    name: deploy lambda from source
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout source code
+        uses: actions/checkout@v3
+      - name: default deploy
+        uses: appleboy/lambda-action@v0.1.7
+        with:
+          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws_region: ${{ secrets.AWS_REGION }}
+          function_name: gorush
+          source: example/index.js
+  
+'| {near: bottom-center}

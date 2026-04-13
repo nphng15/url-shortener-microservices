@@ -1,0 +1,211 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+  }
+}
+
+direction: right
+
+title: |md
+  ## Gateway Routing Table
+  Method + Path Pattern → Upstream + Rewrite + Auth + Rate Limit + Circuit Breaker
+| {near: top-center}
+
+table: {
+  shape: sql_table
+  label: "routingTable  []Route"
+  method_path_1: "POST   /api/auth/register" {constraint: [PK]}
+  method_path_2: "POST   /api/auth/login" {constraint: [PK]}
+  method_path_3: "POST   /api/shorten" {constraint: [PK]}
+  method_path_4: "GET    /api/urls" {constraint: [PK]}
+  method_path_5: "DELETE /api/urls/{code}" {constraint: [PK]}
+  method_path_6: "GET    /r/{code}" {constraint: [PK]}
+  method_path_7: "GET    /api/stats/{code}" {constraint: [PK]}
+  method_path_8: "GET    /api/notifications" {constraint: [PK]}
+}
+
+table.style: {
+  fill: "#E8E8F0"
+  stroke: "#5555AA"
+}
+
+row1: {
+  label: "POST /api/auth/register"
+  style.fill: "#F0F4FF"
+  style.border-radius: 4
+  method: "POST" {style.fill: "#D0E8FF"}
+  pattern: "/api/auth/register" {style.fill: "#FFFFFF"}
+  strip: "strip /api" {style.fill: "#F5F5F5"}
+  upstream_path: "→  /register" {style.fill: "#E8F5E9"}
+  auth: "auth: ✗" {style.fill: "#FFF9C4"}
+  rl: "rl: —" {style.fill: "#FFF9C4"}
+  cb: "CB: ✗" {style.fill: "#FFF9C4"}
+}
+
+row2: {
+  label: "POST /api/auth/login"
+  style.fill: "#F0F4FF"
+  style.border-radius: 4
+  method: "POST" {style.fill: "#D0E8FF"}
+  pattern: "/api/auth/login" {style.fill: "#FFFFFF"}
+  strip: "strip /api" {style.fill: "#F5F5F5"}
+  upstream_path: "→  /login" {style.fill: "#E8F5E9"}
+  auth: "auth: ✗" {style.fill: "#FFF9C4"}
+  rl: "rl: —" {style.fill: "#FFF9C4"}
+  cb: "CB: ✗" {style.fill: "#FFF9C4"}
+}
+
+row3: {
+  label: "POST /api/shorten"
+  style.fill: "#FFF3E0"
+  style.border-radius: 4
+  method: "POST" {style.fill: "#D0E8FF"}
+  pattern: "/api/shorten" {style.fill: "#FFFFFF"}
+  strip: "strip /api" {style.fill: "#F5F5F5"}
+  upstream_path: "→  /shorten" {style.fill: "#E8F5E9"}
+  auth: "auth: ✓ JWT" {style.fill: "#FFCDD2"}
+  rl: "rl: \"shorten\"\n10 req/60s" {style.fill: "#FFE0B2"}
+  cb: "CB: ✗" {style.fill: "#FFF9C4"}
+}
+
+row4: {
+  label: "GET /api/urls"
+  style.fill: "#FFF3E0"
+  style.border-radius: 4
+  method: "GET" {style.fill: "#C8E6C9"}
+  pattern: "/api/urls" {style.fill: "#FFFFFF"}
+  strip: "strip /api" {style.fill: "#F5F5F5"}
+  upstream_path: "→  /urls" {style.fill: "#E8F5E9"}
+  auth: "auth: ✓ JWT" {style.fill: "#FFCDD2"}
+  rl: "rl: —" {style.fill: "#FFF9C4"}
+  cb: "CB: ✗" {style.fill: "#FFF9C4"}
+}
+
+row5: {
+  label: "DELETE /api/urls/{code}"
+  style.fill: "#FFF3E0"
+  style.border-radius: 4
+  method: "DELETE" {style.fill: "#FFCDD2"}
+  pattern: "/api/urls/{code}" {style.fill: "#FFFFFF"}
+  strip: "strip /api" {style.fill: "#F5F5F5"}
+  wildcard: "extract {code}" {style.fill: "#EDE7F6"}
+  upstream_path: "→  /urls/{code}" {style.fill: "#E8F5E9"}
+  auth: "auth: ✓ JWT" {style.fill: "#FFCDD2"}
+  rl: "rl: —" {style.fill: "#FFF9C4"}
+  cb: "CB: ✗" {style.fill: "#FFF9C4"}
+}
+
+row6: {
+  label: "GET /r/{code}  ← hot redirect path"
+  style.fill: "#FCE4EC"
+  style.border-radius: 4
+  method: "GET" {style.fill: "#C8E6C9"}
+  pattern: "/r/{code}" {style.fill: "#FFFFFF"}
+  strip: "strip /r\n(rewrite /{code})" {style.fill: "#F5F5F5"}
+  wildcard: "extract {code}" {style.fill: "#EDE7F6"}
+  upstream_path: "→  /{code}" {style.fill: "#E8F5E9"}
+  auth: "auth: ✗" {style.fill: "#FFF9C4"}
+  rl: "rl: \"redirect\"\n300 req/60s" {style.fill: "#FFE0B2"}
+  cb: "CB: ✓ YES" {
+    style.fill: "#EF9A9A"
+    style.bold: true
+  }
+}
+
+row7: {
+  label: "GET /api/stats/{code}"
+  style.fill: "#F0F4FF"
+  style.border-radius: 4
+  method: "GET" {style.fill: "#C8E6C9"}
+  pattern: "/api/stats/{code}" {style.fill: "#FFFFFF"}
+  strip: "strip /api" {style.fill: "#F5F5F5"}
+  wildcard: "extract {code}" {style.fill: "#EDE7F6"}
+  upstream_path: "→  /stats/{code}" {style.fill: "#E8F5E9"}
+  auth: "auth: ✗" {style.fill: "#FFF9C4"}
+  rl: "rl: —" {style.fill: "#FFF9C4"}
+  cb: "CB: ✗" {style.fill: "#FFF9C4"}
+}
+
+row8: {
+  label: "GET /api/notifications"
+  style.fill: "#FFF3E0"
+  style.border-radius: 4
+  method: "GET" {style.fill: "#C8E6C9"}
+  pattern: "/api/notifications" {style.fill: "#FFFFFF"}
+  strip: "strip /api" {style.fill: "#F5F5F5"}
+  upstream_path: "→  /notifications" {style.fill: "#E8F5E9"}
+  auth: "auth: ✓ JWT" {style.fill: "#FFCDD2"}
+  rl: "rl: —" {style.fill: "#FFF9C4"}
+  cb: "CB: ✗" {style.fill: "#FFF9C4"}
+}
+
+us: "user-service\n:8083" {
+  style.fill: "#E3F2FD"
+  style.stroke: "#1565C0"
+  style.border-radius: 6
+}
+url: "url-service\n:8081" {
+  style.fill: "#E8F5E9"
+  style.stroke: "#2E7D32"
+  style.border-radius: 6
+}
+ana: "analytics-service\n:8082" {
+  style.fill: "#FFF8E1"
+  style.stroke: "#F57F17"
+  style.border-radius: 6
+}
+notif: "notification-service\n:8084" {
+  style.fill: "#FCE4EC"
+  style.stroke: "#880E4F"
+  style.border-radius: 6
+}
+cb_box: "CircuitBreaker\n(url-service only)\nmaxFail=5  openTimeout=30s\nfailureWindow=10s" {
+  style.fill: "#FFEBEE"
+  style.stroke: "#C62828"
+  style.border-radius: 6
+  style.bold: true
+}
+rl_box: "Redis Token Bucket\nrl:{bucket}:{clientIP}\nINCR + conditional EXPIRE" {
+  style.fill: "#F3E5F5"
+  style.stroke: "#6A1B9A"
+  style.border-radius: 6
+}
+
+wildcard_note: |md
+  **{code} wildcard extraction**
+  `strings.HasPrefix(r.URL.Path, route.PathPrefix)`
+  first-match-wins linear scan over routingTable
+  Path rewrite examples:
+  - `/api/shorten` → strip `/api` → `/shorten`
+  - `/r/abc1234`  → strip `/r`  → `/abc1234`
+  - `/api/stats/abc1234` → strip `/api` → `/stats/abc1234`
+| {
+  near: bottom-center
+  style.fill: "#FAFAFA"
+  style.stroke: "#BDBDBD"
+  style.border-radius: 6
+}
+
+row1 -> us: "/register" {style.stroke: "#1565C0"; style.stroke-dash: 3}
+row2 -> us: "/login" {style.stroke: "#1565C0"; style.stroke-dash: 3}
+row3 -> url: "/shorten" {style.stroke: "#2E7D32"}
+row4 -> url: "/urls" {style.stroke: "#2E7D32"}
+row5 -> url: "/urls/{code}" {style.stroke: "#2E7D32"}
+row6 -> cb_box: "via CB" {style.stroke: "#C62828"; style.bold: true}
+cb_box -> url: "/{code}" {style.stroke: "#C62828"; style.bold: true}
+row7 -> ana: "/stats/{code}" {style.stroke: "#F57F17"; style.stroke-dash: 3}
+row8 -> notif: "/notifications" {style.stroke: "#880E4F"}
+row3 -> rl_box: "bucket=\"shorten\"\n10/60s" {style.stroke: "#6A1B9A"; style.stroke-dash: 5}
+row6 -> rl_box: "bucket=\"redirect\"\n300/60s" {style.stroke: "#6A1B9A"; style.stroke-dash: 5}
+
+auth_note: "JWT Required Routes\n(shared/auth.VerifyToken — local HMAC-SHA256,\nno user-service call per request)" {
+  style.fill: "#FFCDD2"
+  style.stroke: "#B71C1C"
+  style.border-radius: 6
+}
+
+row3 -> auth_note {style.stroke-dash: 3; style.stroke: "#B71C1C"}
+row4 -> auth_note {style.stroke-dash: 3; style.stroke: "#B71C1C"}
+row5 -> auth_note {style.stroke-dash: 3; style.stroke: "#B71C1C"}
+row8 -> auth_note {style.stroke-dash: 3; style.stroke: "#B71C1C"}

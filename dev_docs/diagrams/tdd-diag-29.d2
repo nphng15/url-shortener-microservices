@@ -1,0 +1,253 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 6
+  }
+}
+
+title: |'md'
+  ## Circuit Breaker State Machine
+  `gateway/circuitbreaker.go` — all transitions guarded by `sync.Mutex`
+'| {near: top-center}
+
+# ── CircuitBreaker Struct ─────────────────────────────────────────────────────
+cb_struct: CircuitBreaker {
+  shape: class
+  style.fill: "#2d1b69"
+  style.font-color: "#e8d5ff"
+  style.stroke: "#7c3aed"
+  style.stroke-width: 2
+
+  state: "CircuitState  // CLOSED | OPEN | HALF_OPEN"
+  failures: "int         // consecutive failure count"
+  lastFailureTime: "time.Time   // time of most recent failure"
+  windowStart: "time.Time   // current failure window start"
+  maxFailures: "int         // default: 5"
+  openTimeout: "time.Duration // default: 30s"
+  failureWindow: "time.Duration // default: 10s"
+  mu: "sync.Mutex  // guards ALL field reads + writes"
+}
+
+# ── States ────────────────────────────────────────────────────────────────────
+closed: CLOSED {
+  shape: rectangle
+  style.fill: "#14532d"
+  style.font-color: "#bbf7d0"
+  style.stroke: "#22c55e"
+  style.stroke-width: 3
+  style.border-radius: 8
+  label: |'md'
+    **CLOSED**
+    *Normal Operation*
+    **Invariants:**
+    - All requests forwarded to upstream
+    - `failures` increments on 5xx response
+    - `failures` resets to 0 on success
+    - `windowStart` resets if `now > windowStart + failureWindow`
+  '|
+}
+
+open: OPEN {
+  shape: rectangle
+  style.fill: "#7f1d1d"
+  style.font-color: "#fecaca"
+  style.stroke: "#ef4444"
+  style.stroke-width: 3
+  style.border-radius: 8
+  label: |'md'
+    **OPEN**
+    *Tripped — Rejecting All Requests*
+    **Invariants:**
+    - `Do()` returns `ErrCircuitOpen` immediately
+    - No upstream call made
+    - `lastFailureTime` is set at trip moment
+    - Response to client: `503 {"error":"service unavailable"}`
+  '|
+}
+
+half_open: HALF_OPEN {
+  shape: rectangle
+  style.fill: "#78350f"
+  style.font-color: "#fde68a"
+  style.stroke: "#f59e0b"
+  style.stroke-width: 3
+  style.border-radius: 8
+  label: |'md'
+    **HALF_OPEN**
+    *Probe Mode — Testing Upstream*
+    **Invariants:**
+    - Exactly one probe request forwarded
+    - Probe outcome determines next state
+    - Concurrent requests during probe: implementation-defined
+  '|
+}
+
+# ── Initial State Marker ──────────────────────────────────────────────────────
+init: "" {
+  shape: circle
+  style.fill: "#f8fafc"
+  style.stroke: "#f8fafc"
+  width: 20
+  height: 20
+}
+init -> closed: "" {
+  style.stroke: "#94a3b8"
+  style.stroke-width: 2
+}
+
+# ── Legal Transitions ─────────────────────────────────────────────────────────
+closed -> open: |'md'
+  **TRIP**
+  `failures >= maxFailures (5)`
+  within `failureWindow (10s)`
+  *Action:*
+  `state = OPEN`
+  `windowStart = now()`
+'| {
+  style.stroke: "#ef4444"
+  style.stroke-width: 3
+  style.font-color: "#ef4444"
+  target-arrowhead.shape: arrow
+}
+
+open -> half_open: |'md'
+  **TIMEOUT ELAPSED**
+  `now() >= lastFailureTime + openTimeout (30s)`
+  *Guard:* checked on every `Do()` call
+'| {
+  style.stroke: "#f59e0b"
+  style.stroke-width: 2
+  style.stroke-dash: 4
+  style.font-color: "#f59e0b"
+  target-arrowhead.shape: arrow
+}
+
+half_open -> closed: |'md'
+  **PROBE SUCCEEDS**
+  upstream returns non-5xx
+  *Action:*
+  `state = CLOSED`, `failures = 0`
+'| {
+  style.stroke: "#22c55e"
+  style.stroke-width: 3
+  style.font-color: "#22c55e"
+  target-arrowhead.shape: arrow
+}
+
+half_open -> open: |'md'
+  **PROBE FAILS**
+  upstream returns 5xx / network error
+  *Action:*
+  `state = OPEN`
+  `lastFailureTime = now()`
+'| {
+  style.stroke: "#ef4444"
+  style.stroke-width: 3
+  style.font-color: "#ef4444"
+  target-arrowhead.shape: arrow
+}
+
+# Self-loops
+closed -> closed: |'md'
+  **SUCCESS**
+  `failures = 0`
+'| {
+  style.stroke: "#22c55e"
+  style.stroke-width: 1
+  style.stroke-dash: 3
+  target-arrowhead.shape: arrow
+}
+
+closed -> closed: |'md'
+  **PARTIAL FAILURE**
+  `failures < maxFailures`
+  `failures++`
+'| {
+  style.stroke: "#f97316"
+  style.stroke-width: 1
+  style.stroke-dash: 3
+  target-arrowhead.shape: arrow
+}
+
+# ── ILLEGAL Transition ────────────────────────────────────────────────────────
+illegal_direct: "ILLEGAL TRANSITION" {
+  shape: rectangle
+  style.fill: "#1e1b4b"
+  style.font-color: "#c7d2fe"
+  style.stroke: "#6366f1"
+  style.stroke-width: 2
+  style.stroke-dash: 6
+  style.border-radius: 4
+  label: |'md'
+    ⛔ **ILLEGAL**
+    `OPEN → CLOSED` (direct)
+    Must always pass through `HALF_OPEN`
+    probe phase.
+  '|
+}
+
+open -> illegal_direct: "" {
+  style.stroke: "#6366f1"
+  style.stroke-width: 2
+  style.stroke-dash: 6
+  target-arrowhead.shape: arrow
+}
+illegal_direct -> closed: "" {
+  style.stroke: "#6366f1"
+  style.stroke-width: 2
+  style.stroke-dash: 6
+  target-arrowhead.shape: arrow
+}
+
+# ── Mutex Annotation ──────────────────────────────────────────────────────────
+mutex_note: |'md'
+  **🔒 `sync.Mutex` guards all state transitions**
+  go
+  func (cb *CircuitBreaker) Do(ctx context.Context,
+      upstream func() error) error {
+    cb.mu.Lock()         // ← acquire
+    state := cb.state
+    // ... evaluate state ...
+    cb.mu.Unlock()       // ← release before upstream call
+    err := upstream()    // upstream runs WITHOUT lock
+    cb.mu.Lock()         // ← re-acquire to record outcome
+    defer cb.mu.Unlock()
+    // ... update state ...
+  }
+  
+  **5xx detection:** `upstream` returns error if status `>= 500`.
+'| {
+  near: bottom-center
+  style.fill: "#0f172a"
+  style.font-color: "#94a3b8"
+  style.stroke: "#334155"
+  style.stroke-width: 1
+  style.border-radius: 6
+}
+
+# ── Timing Annotation ─────────────────────────────────────────────────────────
+timing_note: |'md'
+  **Timing constants (config-driven):**
+  | Parameter | Default | Config Field |
+  |-----------|---------|--------------|
+  | `maxFailures` | 5 | `CBMaxFailures` |
+  | `failureWindow` | 10s | `CBFailureWindow` |
+  | `openTimeout` | 30s | `CBOpenTimeout` |
+  
+  **Applies to:** url-service proxy only.
+'| {
+  near: bottom-right
+  style.fill: "#0f172a"
+  style.font-color: "#94a3b8"
+  style.stroke: "#334155"
+  style.border-radius: 6
+}
+
+cb_struct -> closed: "owns state" {
+  style.stroke: "#7c3aed"
+  style.stroke-width: 1
+  style.stroke-dash: 5
+  style.font-color: "#7c3aed"
+  target-arrowhead.shape: diamond
+  target-arrowhead.style.filled: false
+}

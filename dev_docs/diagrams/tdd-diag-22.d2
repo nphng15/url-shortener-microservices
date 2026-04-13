@@ -1,0 +1,269 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+direction: right
+title: |md
+  ## Analytics Service Module Architecture
+  `analytics-service` — M4 Component Diagram
+| {near: top-center}
+# ── Interfaces ────────────────────────────────────────────────────────────────
+ClickRepository: {
+  shape: class
+  style.fill: "#C7F1FF"
+  style.stroke: "#1A7FAF"
+  label: "«interface»\nClickRepository"
+  Insert: "Insert(ctx, tx, rec *ClickRecord) error"
+  CountTotal: "CountByCode(ctx, code string) (int64, error)"
+  CountSince: "CountByCodeSince(ctx, code string, since time.Time) (int64, error)"
+  TopReferers: "TopReferers(ctx, code string, n int) ([]RefererCount, error)"
+  TimelineBuckets: "TimelineBuckets(ctx, code, unit string) ([]TimelinePoint, error)"
+}
+DeduplicationRepository: {
+  shape: class
+  style.fill: "#C7F1FF"
+  style.stroke: "#1A7FAF"
+  label: "«interface»\nDeduplicationRepository"
+  Exists: "Exists(ctx, tx, eventID string) (bool, error)"
+  Record: "Insert(ctx, tx, eventID string) error"
+}
+MilestoneRepository: {
+  shape: class
+  style.fill: "#C7F1FF"
+  style.stroke: "#1A7FAF"
+  label: "«interface»\nMilestoneRepository"
+  HasMilestone: "HasMilestone(ctx, tx, code string, n int) (bool, error)"
+  InsertMilestone: "Insert(ctx, tx, code string, n int) error"
+}
+AnalyticsPublisher: {
+  shape: class
+  style.fill: "#C7F1FF"
+  style.stroke: "#1A7FAF"
+  label: "«interface»\nAnalyticsPublisher"
+  PublishMilestone: "PublishMilestone(ctx, evt *MilestoneReachedEvent) error"
+}
+# ── Concrete Implementations ──────────────────────────────────────────────────
+pgxClickStore: {
+  shape: class
+  style.fill: "#B5E7A0"
+  style.stroke: "#2E7D32"
+  label: "pgxClickStore"
+  pool: "pool *pgxpool.Pool"
+  Insert_impl: "INSERT INTO clicks (...) VALUES (...)"
+  Count_impl: "SELECT COUNT(*) FROM clicks WHERE short_code=?"
+  Referer_impl: "SELECT referer, COUNT(*) GROUP BY referer"
+  Timeline_impl: "date_trunc(?unit, clicked_at) GROUP BY period"
+}
+pgxDeduplicationStore: {
+  shape: class
+  style.fill: "#B5E7A0"
+  style.stroke: "#2E7D32"
+  label: "pgxDeduplicationStore"
+  pool2: "pool *pgxpool.Pool"
+  pk_lookup: "SELECT EXISTS(... WHERE event_id=?)"
+  pk_insert: "INSERT INTO processed_events ON CONFLICT DO NOTHING"
+}
+pgxMilestoneStore: {
+  shape: class
+  style.fill: "#B5E7A0"
+  style.stroke: "#2E7D32"
+  label: "pgxMilestoneStore"
+  pool3: "pool *pgxpool.Pool"
+  has_q: "SELECT EXISTS(... WHERE short_code=? AND milestone=?)"
+  ins_q: "INSERT INTO milestones ON CONFLICT DO NOTHING"
+}
+amqpAnalyticsPublisher: {
+  shape: class
+  style.fill: "#B5E7A0"
+  style.stroke: "#2E7D32"
+  label: "amqpAnalyticsPublisher"
+  ch: "ch *amqp.Channel"
+  exchange: 'exchangeName: "url-shortener"'
+  publish_impl: 'PublishWithContext(routing_key: "milestone.reached")'
+}
+# ── Core Components ───────────────────────────────────────────────────────────
+ClickConsumer: {
+  shape: class
+  style.fill: "#FFD54F"
+  style.stroke: "#F57F17"
+  style.font-color: "#212121"
+  label: "ClickConsumer"
+  conn: "conn *RabbitMQConn"
+  pool_f: "pool *pgxpool.Pool"
+  clickRepo_f: "clickRepo ClickRepository"
+  dedupeRepo_f: "dedupeRepo DeduplicationRepository"
+  milestoneRepo_f: "milestoneRepo MilestoneRepository"
+  checker_f: "checker *MilestoneChecker"
+  log_f: "log *slog.Logger"
+  salt_f: "salt string"
+  healthy_f: "healthy atomic.Bool"
+  Run: "Run(ctx context.Context)"
+  processDelivery: "processDelivery(ctx, d amqp.Delivery)"
+}
+MilestoneChecker: {
+  shape: class
+  style.fill: "#FFD54F"
+  style.stroke: "#F57F17"
+  style.font-color: "#212121"
+  label: "MilestoneChecker"
+  thresholds: "thresholds []int // [10, 100, 1000]"
+  clickStore_f: "clickStore ClickRepository"
+  milestoneStore_f: "milestoneStore MilestoneRepository"
+  publisher_f: "publisher AnalyticsPublisher"
+  log_f2: "log *slog.Logger"
+  CheckAndPublish: "CheckAndPublish(ctx, tx, code,\n  userID, userEmail, corrID string) error"
+}
+StatsHandler: {
+  shape: class
+  style.fill: "#FFD54F"
+  style.stroke: "#F57F17"
+  style.font-color: "#212121"
+  label: "StatsHandler"
+  clickRepo_h: "clickStore ClickRepository"
+  log_h: "log *slog.Logger"
+  Stats: "Stats(w http.ResponseWriter, r *http.Request)"
+  Timeline: "Timeline(w http.ResponseWriter, r *http.Request)"
+}
+# ── External Systems ──────────────────────────────────────────────────────────
+RabbitMQ_In: {
+  shape: cylinder
+  style.fill: "#E8D5B7"
+  style.stroke: "#8B6914"
+  label: "RabbitMQ\n\"analytics.clicks\"\n(queue)"
+}
+RabbitMQ_Out: {
+  shape: cylinder
+  style.fill: "#E8D5B7"
+  style.stroke: "#8B6914"
+  label: "RabbitMQ\n\"url-shortener\" exchange\nrouting_key: milestone.reached"
+}
+analytics_db: {
+  shape: cylinder
+  style.fill: "#E8D5B7"
+  style.stroke: "#8B6914"
+  label: "analytics_db\n(PostgreSQL)\nclicks | milestones\nprocessed_events"
+}
+HTTP_Client: {
+  shape: rectangle
+  style.fill: "#F3E5F5"
+  style.stroke: "#6A1B9A"
+  label: "HTTP Clients\nGET /stats/{code}\nGET /stats/{code}/timeline\n(no auth required)"
+}
+# ── Implementation arrows (hollow triangle = implements) ──────────────────────
+pgxClickStore -> ClickRepository: {
+  style.stroke: "#1A7FAF"
+  style.stroke-dash: 4
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  label: "implements"
+}
+pgxDeduplicationStore -> DeduplicationRepository: {
+  style.stroke: "#1A7FAF"
+  style.stroke-dash: 4
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  label: "implements"
+}
+pgxMilestoneStore -> MilestoneRepository: {
+  style.stroke: "#1A7FAF"
+  style.stroke-dash: 4
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  label: "implements"
+}
+amqpAnalyticsPublisher -> AnalyticsPublisher: {
+  style.stroke: "#1A7FAF"
+  style.stroke-dash: 4
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  label: "implements"
+}
+# ── Dependency injection (solid = owns/holds) ─────────────────────────────────
+ClickConsumer -> ClickRepository: {
+  style.stroke: "#F57F17"
+  label: "holds"
+}
+ClickConsumer -> DeduplicationRepository: {
+  style.stroke: "#F57F17"
+  label: "holds"
+}
+ClickConsumer -> MilestoneChecker: {
+  style.stroke: "#F57F17"
+  label: "holds"
+}
+MilestoneChecker -> ClickRepository: {
+  style.stroke: "#F57F17"
+  label: "holds"
+}
+MilestoneChecker -> MilestoneRepository: {
+  style.stroke: "#F57F17"
+  label: "holds"
+}
+MilestoneChecker -> AnalyticsPublisher: {
+  style.stroke: "#F57F17"
+  label: "holds"
+}
+StatsHandler -> ClickRepository: {
+  style.stroke: "#F57F17"
+  label: "holds"
+}
+# ── Data flow (dashed = references / data path) ───────────────────────────────
+RabbitMQ_In -> ClickConsumer: {
+  style.stroke: "#2E7D32"
+  style.stroke-dash: 3
+  style.animated: true
+  label: "URLClickedEvent\nprefetch=1\nmanual Ack"
+}
+ClickConsumer -> analytics_db: {
+  style.stroke: "#2E7D32"
+  style.stroke-dash: 3
+  label: "BEGIN tx\n• dedup INSERT\n• click INSERT\n• milestone check\nCOMMIT"
+}
+MilestoneChecker -> RabbitMQ_Out: {
+  style.stroke: "#8B6914"
+  style.stroke-dash: 3
+  style.animated: true
+  label: "MilestoneReachedEvent\n(on threshold cross)"
+}
+StatsHandler -> analytics_db: {
+  style.stroke: "#2E7D32"
+  style.stroke-dash: 3
+  label: "4× concurrent\naggregation queries\n(errgroup)"
+}
+HTTP_Client -> StatsHandler: {
+  style.stroke: "#6A1B9A"
+  label: "GET /stats/{code}\nGET /stats/{code}/timeline"
+}
+# ── Concrete → DB ─────────────────────────────────────────────────────────────
+pgxClickStore -> analytics_db: {
+  style.stroke: "#B5E7A0"
+  style.stroke-dash: 5
+  label: "clicks table\nidx_clicks_short_code_time"
+}
+pgxDeduplicationStore -> analytics_db: {
+  style.stroke: "#B5E7A0"
+  style.stroke-dash: 5
+  label: "processed_events\nPK: event_id"
+}
+pgxMilestoneStore -> analytics_db: {
+  style.stroke: "#B5E7A0"
+  style.stroke-dash: 5
+  label: "milestones table\nUNIQUE(code,n)"
+}
+# ── Annotation ────────────────────────────────────────────────────────────────
+legend: |md
+  **Color Key**
+  - 🟡 Yellow — Core service structs
+  - 🔵 Blue — Interfaces (contracts)
+  - 🟢 Green — pgx implementations
+  - 🟤 Tan — External systems (RabbitMQ, PostgreSQL)
+  - 🟣 Purple — HTTP clients
+  **Key Invariants**
+  - Single consumer goroutine, prefetch=1 → serial processing
+  - All DB writes in one transaction (dedup + click + milestone)
+  - Publish failure → log + continue; milestone row already committed
+  - Poison messages → d.Ack(false), never Nack
+  - ip_hash stored as SHA-256(ip+salt), never raw IP
+| {near: bottom-center}

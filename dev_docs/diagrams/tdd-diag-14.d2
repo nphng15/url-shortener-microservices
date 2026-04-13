@@ -1,0 +1,294 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+
+direction: down
+
+title: |md
+  ## Base62 Short Code Generation Algorithm
+  `62^7 = 3,521,614,606,208` unique codes · `crypto/rand` only · 5-retry collision budget
+| {near: top-center}
+
+# ─── ALPHABET CONSTANT ───────────────────────────────────────────────────────
+alphabet: {
+  label: |md
+    **ALPHABET CONSTANT** (compile-time, immutable)
+    `"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"`
+    indices `[0..9]` = digits · `[10..35]` = A–Z · `[36..61]` = a–z
+    len = **62** · no ambiguous chars (no 0/O, 1/l/I confusion)
+  |
+  shape: rectangle
+  style.fill: "#D0E8FF"
+  style.stroke: "#2D6A9F"
+  style.font: mono
+  style.bold: true
+}
+
+# ─── FORBIDDEN WARNING ────────────────────────────────────────────────────────
+forbidden: {
+  label: |md
+    ⛔ **math/rand FORBIDDEN**
+    `math/rand` default source is seeded with a fixed value in Go < 1.20
+    or uses a goroutine-local state predictable from timing.
+    An attacker can enumerate all codes generated in a session.
+    **Only `crypto/rand` (OS entropy pool) is permitted.**
+  |
+  shape: rectangle
+  style.fill: "#FFD6D6"
+  style.stroke: "#CC0000"
+  style.font: mono
+  style.bold: false
+}
+
+# ─── STEP 1 ──────────────────────────────────────────────────────────────────
+step1: {
+  label: |md
+    **Step 1 — Allocate 8-byte buffer**
+    `buf := make([]byte, 8)`
+    8 bytes = 64 bits of entropy capacity.
+    Only 7 base62 digits needed (62^7 ≈ 2^41.7),
+    so 64 bits provides ample headroom before modulo reduction.
+  |
+  shape: rectangle
+  style.fill: "#E8F5E9"
+  style.stroke: "#388E3C"
+  style.bold: false
+}
+
+# ─── STEP 2 ──────────────────────────────────────────────────────────────────
+step2: {
+  label: |md
+    **Step 2 — Fill with `crypto/rand`**
+    `_, err := rand.Read(buf)`
+    `if err != nil { panic(...) }`
+    `crypto/rand.Read` draws from `/dev/urandom` (Linux),
+    `CryptGenRandom` (Windows), or `getentropy(2)` (macOS).
+    Panic is correct: entropy exhaustion = OS-level failure,
+    process must not continue generating codes.
+  |
+  shape: rectangle
+  style.fill: "#E8F5E9"
+  style.stroke: "#388E3C"
+  style.bold: false
+}
+
+# ─── STEP 3 ──────────────────────────────────────────────────────────────────
+step3: {
+  label: |md
+    **Step 3 — Decode to `big.Int` + reduce to base62 space**
+    `n := new(big.Int).SetBytes(buf)       // 0 ≤ n < 2^64`
+    `max := big.NewInt(62)^7              // = 3,521,614,606,208`
+    `n.Mod(n, max)                        // 0 ≤ n < 62^7`
+    Modulo bias: `2^64 / 62^7 ≈ 5,242` — the bias is
+    `(2^64 mod 62^7) / 2^64 ≈ 0.000028%`. Negligible for URL codes.
+  |
+  shape: rectangle
+  style.fill: "#E8F5E9"
+  style.stroke: "#388E3C"
+  style.bold: false
+}
+
+# ─── STEP 4 — ENCODE LOOP ─────────────────────────────────────────────────────
+step4: {
+  label: |md
+    **Step 4 — Base62 Encode (right-to-left, length=7)**
+    `result := make([]byte, 7)`
+    `for i := 6; i >= 0; i-- {`
+    `    n, mod = n.DivMod(n, big.NewInt(62))`
+    `    result[i] = alphabet[mod.Int64()]`
+    `}`
+    `return string(result)   // always exactly 7 chars`
+    Left-pad with `alphabet[0]` = `'0'` when `n < 62^6`.
+    DivMod extracts least-significant digit first → fills right-to-left.
+  |
+  shape: rectangle
+  style.fill: "#E8F5E9"
+  style.stroke: "#388E3C"
+  style.bold: false
+}
+
+# ─── STEP 4 VISUAL: before/after ─────────────────────────────────────────────
+encode_example: {
+  style.fill: "#FAFAFA"
+  style.stroke: "#AAAAAA"
+  
+  before: {
+    label: |md
+      **n = 42,000,000,000** (example after Mod)
+      `big.Int` value before encoding
+    |
+    shape: rectangle
+    style.fill: "#FFF9C4"
+    style.stroke: "#F9A825"
+  }
+  
+  iter_table: {
+    label: |'md
+| i | n before DivMod | mod | alphabet[mod] |
+|---|-----------------|-----|---------------|
+| 6 | 42,000,000,000  | 16  | `G`           |
+| 5 | 677,419,354     | 20  | `K`           |
+| 4 | 10,926,118      | 54  | `s`           |
+| 3 | 176,228         | 56  | `u`           |
+| 2 | 2,842           | 22  | `M`           |
+| 1 | 45              | 45  | `j`           |
+| 0 | 0               | 0   | `0`           |
+'|
+    shape: rectangle
+    style.fill: "#FFF9C4"
+    style.stroke: "#F9A825"
+    style.font: mono
+  }
+  
+  after: {
+    label: |md
+      **result = `"0jMusKG"`**
+      7 chars · all from base62 alphabet ✓
+    |
+    shape: rectangle
+    style.fill: "#C8E6C9"
+    style.stroke: "#388E3C"
+    style.bold: true
+  }
+  
+  before -> iter_table: "DivMod × 7"
+  iter_table -> after: "string(result)"
+}
+
+# ─── RETRY LOOP ───────────────────────────────────────────────────────────────
+retry_loop: {
+  style.fill: "#F3E5F5"
+  style.stroke: "#7B1FA2"
+  
+  loop_header: {
+    label: |md
+      **Collision-Retry Loop**
+      `for attempt := 1; attempt <= 5; attempt++`
+    |
+    shape: rectangle
+    style.fill: "#CE93D8"
+    style.stroke: "#7B1FA2"
+    style.bold: true
+  }
+  
+  generate: {
+    label: |md
+      **Generate code**
+      `shortCode = generator.Generate()`
+      (Steps 1–4 above; new `crypto/rand` call each attempt)
+    |
+    shape: rectangle
+    style.fill: "#F3E5F5"
+    style.stroke: "#AB47BC"
+  }
+  
+  insert_tx: {
+    label: |md
+      **INSERT INTO urls + outbox (single tx)**
+      `BEGIN`
+      `INSERT INTO urls (short_code, ...) VALUES ($1, ...)`
+      `INSERT INTO outbox (event_type, payload) VALUES (...)`
+      `COMMIT`
+    |
+    shape: rectangle
+    style.fill: "#F3E5F5"
+    style.stroke: "#AB47BC"
+    style.font: mono
+  }
+  
+  check_conflict: {
+    label: "pgError.Code == \"23505\" ?"
+    shape: diamond
+    style.fill: "#EDE7F6"
+    style.stroke: "#7B1FA2"
+    style.bold: true
+  }
+  
+  success_path: {
+    label: |md
+      **SUCCESS**
+      Return `201` with `{short_code, short_url, ...}`
+      outbox row will be published by background worker
+    |
+    shape: rectangle
+    style.fill: "#C8E6C9"
+    style.stroke: "#2E7D32"
+    style.bold: true
+  }
+  
+  retry_path: {
+    label: |md
+      **UNIQUE VIOLATION — auto-generated code**
+      Rollback tx · `shortCode = ""` · increment attempt
+      Re-enter loop with fresh `crypto/rand` call
+    |
+    shape: rectangle
+    style.fill: "#FFF3E0"
+    style.stroke: "#E65100"
+  }
+  
+  custom_conflict: {
+    label: |md
+      **UNIQUE VIOLATION — custom code**
+      Rollback tx · NO retry (user chose this code)
+      Return `409 {"error":"short code already taken","field":"custom_code"}`
+    |
+    shape: rectangle
+    style.fill: "#FFD6D6"
+    style.stroke: "#CC0000"
+  }
+  
+  exhausted: {
+    label: |md
+      **ALL 5 ATTEMPTS EXHAUSTED**
+      `503 {"error":"service temporarily unavailable, try again"}`
+      Log: `log.Error("short code collision exhausted", "attempts", 5)`
+      At 1M URLs: P(all 5 collide) ≈ (1M/3.5T)^5 ≈ 4.5 × 10^-33
+    |
+    shape: rectangle
+    style.fill: "#FFD6D6"
+    style.stroke: "#CC0000"
+    style.bold: true
+  }
+  
+  loop_header -> generate: "attempt = 1"
+  generate -> insert_tx: "attempt INSERT"
+  insert_tx -> check_conflict
+  check_conflict -> success_path: "no conflict\n(nil error)" {style.stroke: "#2E7D32"}
+  check_conflict -> retry_path: "conflict +\nauto code" {style.stroke: "#E65100"; style.stroke-dash: 4}
+  check_conflict -> custom_conflict: "conflict +\ncustom code" {style.stroke: "#CC0000"; style.stroke-dash: 4}
+  retry_path -> generate: "attempt ≤ 5\nshortCode = \"\"" {style.stroke: "#E65100"; style.stroke-dash: 4}
+  retry_path -> exhausted: "attempt > 5" {style.stroke: "#CC0000"}
+}
+
+# ─── PROBABILITY ANNOTATION ───────────────────────────────────────────────────
+prob_note: {
+  label: |'md
+**Collision Probability Analysis**
+| URLs in DB (N) | P(single collision) | P(all 5 collide) |
+|---------------|---------------------|-----------------|
+| 1,000         | 2.84 × 10^-10       | negligible      |
+| 1,000,000     | 2.84 × 10^-7        | 4.5 × 10^-33    |
+| 1,000,000,000 | 2.84 × 10^-4        | 1.8 × 10^-3 %   |
+Formula: P ≈ N / 62^7 per attempt.
+At 1B URLs (28% space used), 503 rate ≈ 0.18% — requires longer codes.
+'|
+  shape: rectangle
+  style.fill: "#E3F2FD"
+  style.stroke: "#1565C0"
+  style.font: mono
+}
+
+# ─── CONNECTIONS ─────────────────────────────────────────────────────────────
+alphabet -> forbidden: "contrast: determinism vs entropy" {style.stroke-dash: 3; style.stroke: "#999999"}
+alphabet -> step1: "used in Step 4"
+forbidden -> step2: "why crypto/rand is mandatory"
+step1 -> step2
+step2 -> step3
+step3 -> step4
+step4 -> encode_example.before
+step4 -> retry_loop.loop_header: "Generate() output → attempt loop"
+retry_loop.success_path -> prob_note: "at-scale collision math" {style.stroke-dash: 3}

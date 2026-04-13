@@ -1,0 +1,89 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+shape: sequence_diagram
+
+ticker: "time.Ticker\n(2s interval)"
+coordinator: "OutboxCoordinator"
+db: "PostgreSQL\n(url_db)"
+workerCh: "workerCh\nchan *OutboxRow\n(cap=50)"
+worker1: "Worker-1"
+worker2: "Worker-2"
+worker3: "Worker-3"
+
+normal_poll: Normal Poll Cycle {
+  ticker -> coordinator: "C: tick"
+  coordinator -> db: "SELECT id,event_type,payload\nFROM outbox\nWHERE published_at IS NULL\nORDER BY created_at ASC\nLIMIT 50\nFOR UPDATE SKIP LOCKED"
+  db -> coordinator: "rows [r1, r2, r3]"
+  coordinator -> workerCh: "workerCh <- r1"
+  coordinator -> workerCh: "workerCh <- r2"
+  coordinator -> workerCh: "workerCh <- r3"
+}
+
+concurrent_publish: Concurrent Worker Processing {
+  workerCh -> worker1: "row r1"
+  workerCh -> worker2: "row r2"
+  workerCh -> worker3: "row r3"
+  worker1 -> worker1: "Publish(ctx 5s,\n\"url.created\",\nr1.Payload)"
+  worker2 -> worker2: "Publish(ctx 5s,\n\"url.clicked\",\nr2.Payload)"
+  worker3 -> worker3: "Publish(ctx 5s,\n\"url.deleted\",\nr3.Payload)"
+  worker1 -> db: "UPDATE outbox\nSET published_at=now()\nWHERE id=r1.ID"
+  db -> worker1: "OK"
+  worker2 -> db: "UPDATE outbox\nSET published_at=now()\nWHERE id=r2.ID"
+  db -> worker2: "OK"
+  worker3 -> db: "UPDATE outbox\nSET published_at=now()\nWHERE id=r3.ID"
+  db -> worker3: "OK"
+}
+
+rabbitmq_down: RabbitMQ Down — Publish Failure Path {
+  ticker -> coordinator: "C: tick"
+  coordinator -> db: "FetchUnpublished(limit=50)"
+  db -> coordinator: "rows [r4]"
+  coordinator -> workerCh: "workerCh <- r4"
+  workerCh -> worker1: "row r4"
+  worker1 -> worker1: "Publish(ctx 5s,\n\"url.created\",\nr4.Payload)" {
+    style.stroke: red
+    style.bold: true
+  }
+  worker1 -> worker1: "← error: amqp publish\nurl.created: EOF" {
+    style.stroke: red
+    style.font-color: red
+  }
+  worker1 -> worker1: "log.Warn(\"outbox publish failed\",\n  \"event_type\", r4.EventType,\n  \"outbox_id\",  r4.ID,\n  \"error\",      err)" {
+    style.stroke: red
+  }
+  worker1 -> worker1: "continue\n(skip MarkPublished)" {
+    style.stroke: red
+    style.bold: true
+  }
+  worker1.skip_note: |md
+    **r4.published_at remains NULL**
+    Next poll cycle will re-fetch r4.
+    Consumer must deduplicate by event_id (analytics-service M4).
+  |
+}
+
+next_cycle: Next Poll — Retry r4 {
+  ticker -> coordinator: "C: tick"
+  coordinator -> db: "FetchUnpublished(limit=50)"
+  db -> coordinator: "rows [r4] (published_at IS NULL)"
+  coordinator -> workerCh: "workerCh <- r4"
+  workerCh -> worker1: "row r4 (retry)"
+  worker1 -> worker1: "Publish(ctx 5s,\n\"url.created\",\nr4.Payload) → OK"
+  worker1 -> db: "UPDATE outbox\nSET published_at=now()\nWHERE id=r4.ID"
+  db -> worker1: "OK"
+}
+
+graceful_shutdown: Graceful Shutdown — SIGTERM Received {
+  coordinator -> coordinator: "ctx.Done() fires\n(appCancel() called)"
+  coordinator -> coordinator: "ticker.Stop()"
+  coordinator -> workerCh: "close(workerCh)\n← signals all workers to drain"
+  workerCh -> worker1: "range loop: channel closed\n→ worker1 exits"
+  workerCh -> worker2: "range loop: channel closed\n→ worker2 exits"
+  workerCh -> worker3: "range loop: channel closed\n→ worker3 exits"
+  coordinator -> coordinator: "wg.Wait()\n← blocks until all 3 workers\n   finish in-flight publishes"
+  coordinator -> coordinator: "log.Info(\"outbox coordinator stopped\")\nreturn"
+}

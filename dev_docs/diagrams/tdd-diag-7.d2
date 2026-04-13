@@ -1,0 +1,239 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+direction: right
+title: |md
+  ## User Service Module Architecture
+  `sizeof` annotations · Dependency injection wiring from `main.go`
+| {near: top-center}
+# ─── Interfaces ───────────────────────────────────────────────────────────────
+UserRepository: {
+  shape: class
+  style.fill: "#E8D5F5"
+  style.stroke: "#7B2FBE"
+  style.font-color: "#1a0033"
+  label: "«interface»\nUserRepository"
+  "FindByEmail(ctx context.Context, email string)": "(User, error)"
+  "Insert(ctx context.Context, email string, passwordHash string)": "(User, error)"
+}
+PasswordHasher: {
+  shape: class
+  style.fill: "#E8D5F5"
+  style.stroke: "#7B2FBE"
+  style.font-color: "#1a0033"
+  label: "«interface»\nPasswordHasher"
+  "Hash(plaintext string)": "(string, error)"
+  "Verify(plaintext string, hash string)": "error"
+}
+TokenIssuer: {
+  shape: class
+  style.fill: "#E8D5F5"
+  style.stroke: "#7B2FBE"
+  style.font-color: "#1a0033"
+  label: "«interface»\nTokenIssuer"
+  "Issue(userID string, email string)": "(string, time.Time, error)"
+  "Verify(tokenString string)": "(*Claims, error)"
+}
+# ─── Concrete Implementations ─────────────────────────────────────────────────
+pgxUserStore: {
+  shape: class
+  style.fill: "#D0E8FF"
+  style.stroke: "#1565C0"
+  style.font-color: "#0a1a33"
+  label: "pgxUserStore\nsizeof ≈ 8 bytes (ptr)"
+  "-pool": "*pgxpool.Pool"
+  "Insert(ctx, email, passwordHash)": "(User, error)"
+  "FindByEmail(ctx, email)": "(User, error)"
+  "-isPgUniqueViolation(err)": "bool"
+}
+bcryptHasher: {
+  shape: class
+  style.fill: "#D0E8FF"
+  style.stroke: "#1565C0"
+  style.font-color: "#0a1a33"
+  label: "bcryptHasher\nsizeof = 8 bytes (int)"
+  "-cost": "int  // default 12"
+  "Hash(plaintext)": "(string, error)"
+  "Verify(plaintext, hash)": "error"
+}
+jwtTokenIssuer: {
+  shape: class
+  style.fill: "#D0E8FF"
+  style.stroke: "#1565C0"
+  style.font-color: "#0a1a33"
+  label: "jwtTokenIssuer\nsizeof = 32 bytes"
+  "-secret": "[]byte  // HS256 key"
+  "-ttl": "time.Duration"
+  "Issue(userID, email)": "(string, time.Time, error)"
+  "Verify(tokenString)": "(*Claims, error)"
+}
+# ─── Handler Layer ─────────────────────────────────────────────────────────────
+Handler: {
+  shape: class
+  style.fill: "#D5F5E3"
+  style.stroke: "#1B5E20"
+  style.font-color: "#0a1a00"
+  label: "Handler\nsizeof = 32 bytes (4 ptrs)"
+  "-store": "UserRepository"
+  "-hasher": "PasswordHasher"
+  "-issuer": "TokenIssuer"
+  "-log": "*slog.Logger"
+  "Register(w http.ResponseWriter, r *http.Request)": ""
+  "Login(w http.ResponseWriter, r *http.Request)": ""
+  "Me(w http.ResponseWriter, r *http.Request)": ""
+}
+# ─── Supporting Types ──────────────────────────────────────────────────────────
+User: {
+  shape: class
+  style.fill: "#FFF9C4"
+  style.stroke: "#F57F17"
+  style.font-color: "#1a1000"
+  label: "User  (domain object)\nsizeof ≈ 88 bytes"
+  "ID": "string  // UUID v4"
+  "Email": "string"
+  "PasswordHash": "string  // bcrypt 60-char; NEVER logged"
+  "CreatedAt": "time.Time"
+}
+Claims: {
+  shape: class
+  style.fill: "#FFF9C4"
+  style.stroke: "#F57F17"
+  style.font-color: "#1a1000"
+  label: "Claims  (shared/auth)\nsizeof = 56 bytes"
+  "Sub": "string  // user UUID"
+  "Email": "string"
+  "Iss": "string  // url-shortener"
+  "Iat": "int64   // Unix seconds"
+  "Exp": "int64   // Unix seconds"
+  "IsExpired()": "bool"
+  "ExpiresAt()": "time.Time"
+}
+Config: {
+  shape: class
+  style.fill: "#F5E6D5"
+  style.stroke: "#BF360C"
+  style.font-color: "#1a0800"
+  label: "Config\nsizeof ≈ 104 bytes"
+  "DatabaseURL": "string  // required"
+  "JWTSecret": "string   // required, ≥32 bytes recommended"
+  "BCryptCost": "int      // default 12; range [10,14]"
+  "TokenTTL": "time.Duration  // default 24h"
+  "Port": "string        // default 8080"
+  "ServiceName": "string // url-shortener"
+}
+# ─── main.go Wiring Node ───────────────────────────────────────────────────────
+main: {
+  shape: rectangle
+  style.fill: "#ECEFF1"
+  style.stroke: "#546E7A"
+  style.font-color: "#263238"
+  style.border-radius: 6
+  label: |md
+    **main.go** — dependency wiring
+    go
+    cfg  := loadConfig()
+    pool := NewDBPool(cfg.DatabaseURL)
+    store  := NewUserStore(pool)
+    hasher := NewPasswordHasher(cfg.BCryptCost)
+    issuer := NewTokenIssuer(cfg.JWTSecret, cfg.TokenTTL)
+    h      := NewHandler(store, hasher, issuer, log)
+    
+  |
+}
+# ─── HTTP Routes annotation ────────────────────────────────────────────────────
+routes: {
+  shape: rectangle
+  style.fill: "#ECEFF1"
+  style.stroke: "#546E7A"
+  style.font-color: "#263238"
+  style.border-radius: 6
+  style.stroke-dash: 4
+  label: |md
+    **HTTP Routes**
+    `POST /register` → h.Register
+    `POST /login`    → h.Login
+    `GET  /me`       → JWTMiddleware → h.Me
+    `GET  /health`   → NewHealthHandler
+  |
+}
+# ─── Implements arrows (hollow triangle) ──────────────────────────────────────
+pgxUserStore -> UserRepository: {
+  style.stroke: "#1565C0"
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  label: "implements"
+}
+bcryptHasher -> PasswordHasher: {
+  style.stroke: "#1565C0"
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  label: "implements"
+}
+jwtTokenIssuer -> TokenIssuer: {
+  style.stroke: "#1565C0"
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  label: "implements"
+}
+# ─── Handler owns interfaces (solid arrows) ───────────────────────────────────
+Handler -> UserRepository: {
+  style.stroke: "#1B5E20"
+  style.stroke-width: 2
+  label: "depends on\n(field: store)"
+}
+Handler -> PasswordHasher: {
+  style.stroke: "#1B5E20"
+  style.stroke-width: 2
+  label: "depends on\n(field: hasher)"
+}
+Handler -> TokenIssuer: {
+  style.stroke: "#1B5E20"
+  style.stroke-width: 2
+  label: "depends on\n(field: issuer)"
+}
+# ─── main.go constructs concretions and injects ───────────────────────────────
+main -> pgxUserStore: {
+  style.stroke: "#546E7A"
+  style.stroke-dash: 5
+  label: "NewUserStore(pool)"
+}
+main -> bcryptHasher: {
+  style.stroke: "#546E7A"
+  style.stroke-dash: 5
+  label: "NewPasswordHasher(cost)"
+}
+main -> jwtTokenIssuer: {
+  style.stroke: "#546E7A"
+  style.stroke-dash: 5
+  label: "NewTokenIssuer(secret, ttl)"
+}
+main -> Handler: {
+  style.stroke: "#546E7A"
+  style.stroke-width: 2
+  label: "NewHandler(store,\nhasher, issuer, log)"
+}
+main -> Config: {
+  style.stroke: "#BF360C"
+  style.stroke-dash: 5
+  label: "loadConfig()"
+}
+# ─── Supporting type references (dashed) ─────────────────────────────────────
+pgxUserStore -> User: {
+  style.stroke: "#F57F17"
+  style.stroke-dash: 3
+  label: "returns"
+}
+jwtTokenIssuer -> Claims: {
+  style.stroke: "#F57F17"
+  style.stroke-dash: 3
+  label: "issues / verifies"
+}
+Handler -> routes: {
+  style.stroke: "#546E7A"
+  style.stroke-dash: 4
+  target-arrowhead.shape: arrow
+  label: "registered\nonto mux"
+}

@@ -1,0 +1,559 @@
+id: url-shortener
+name: URL Shortener (Microservices)
+description: >
+  A production-grade URL shortener built as a true microservices system. Four independently
+  deployable Go services communicate via REST (sync) and RabbitMQ (async), each owning its
+  own PostgreSQL database. The focus is correct service boundary design, async event flow,
+  and operational concerns — not feature breadth.
+difficulty: intermediate
+estimated_hours: 40-60
+essence: >
+  Four bounded contexts — URL lifecycle, click analytics, identity, and notifications —
+  each deployed as an independent Go binary with its own PostgreSQL schema, communicating
+  synchronously via HTTP/JSON for reads and asynchronously via RabbitMQ domain events for
+  side effects. An API Gateway provides the single client-facing entry point, enforcing
+  JWT auth and routing without becoming a god component.
+why_important: >
+  Microservices architecture is trivially easy to get wrong: shared databases, synchronous
+  call chains, and god services are the three most common failure modes and they all look
+  fine until the system needs to scale or change. Building a URL shortener forces you to
+  confront every one of these pitfalls in a domain simple enough that the right answer is
+  always obvious — making the anti-patterns impossible to rationalize.
+learning_outcomes:
+  - Design service boundaries using domain-driven bounded contexts
+  - Implement database-per-service with no cross-service DB access
+  - Build an API Gateway that routes and authenticates without business logic
+  - Produce and consume domain events via RabbitMQ without tight coupling
+  - Apply the outbox pattern to guarantee at-least-once event delivery
+  - Implement circuit breaker for resilient inter-service HTTP calls
+  - Trace requests across services using correlation IDs and structured logging
+  - Containerize all services with Docker Compose for local development
+  - Distinguish when to use sync REST vs async events for each interaction
+  - Avoid the distributed monolith anti-pattern in chain calls
+
+skills:
+  - Microservices Architecture
+  - Domain-Driven Design (Bounded Contexts)
+  - Event-Driven Architecture
+  - API Gateway Pattern
+  - Circuit Breaker Pattern
+  - Outbox Pattern
+  - Distributed Tracing
+  - Docker / Docker Compose
+  - RabbitMQ (AMQP)
+  - JWT Authentication
+  - Go (net/http, database/sql, pgxpool)
+  - PostgreSQL
+  - Redis (read-through cache, cache invalidation)
+  - Connection Pooling
+  - Database Index Design
+
+tags:
+  - microservices
+  - go
+  - rabbitmq
+  - postgresql
+  - redis
+  - event-driven
+  - api-gateway
+  - intermediate
+  - distributed-systems
+  - caching
+  - performance
+
+domain: distributed-systems
+
+architecture_doc: architecture-docs/url-shortener/index.md
+
+languages:
+  recommended:
+    - Go
+  also_possible:
+    - Node.js
+    - Python
+
+resources:
+  - name: "Building Microservices — Sam Newman (Ch. 3: How to Model Services)"
+    url: https://www.oreilly.com/library/view/building-microservices-2nd/9781492034018/
+    type: book
+  - name: "AMQP 0-9-1 Model Explained — RabbitMQ Official Docs"
+    url: https://www.rabbitmq.com/tutorials/amqp-concepts
+    type: documentation
+  - name: "Pattern: Database per Service — microservices.io"
+    url: https://microservices.io/patterns/data/database-per-service.html
+    type: article
+  - name: "Pattern: Outbox — microservices.io"
+    url: https://microservices.io/patterns/data/transactional-outbox.html
+    type: article
+  - name: "Circuit Breaker — Martin Fowler"
+    url: https://martinfowler.com/bliki/CircuitBreaker.html
+    type: article
+  - name: "Go net/http official docs"
+    url: https://pkg.go.dev/net/http
+    type: documentation
+  - name: "jackc/pgx — PostgreSQL driver with pgxpool (connection pooling)"
+    url: https://github.com/jackc/pgx
+    type: documentation
+  - name: "Redis Commands: INCR, EXPIRE, SET EX — redis.io docs"
+    url: https://redis.io/docs/latest/commands/
+    type: documentation
+  - name: "A Closer Look at Redis in System Design — Redis read-through cache pattern"
+    url: https://redis.io/learn/howtos/solutions/caching/getting-started
+    type: article
+
+prerequisites:
+  - type: skill
+    name: HTTP request/response cycle (methods, status codes, headers)
+  - type: skill
+    name: Basic SQL (SELECT, INSERT, JOIN, transactions)
+  - type: skill
+    name: Go fundamentals (goroutines, interfaces, error handling)
+  - type: skill
+    name: Docker basics (build, run, docker-compose up)
+  - type: knowledge
+    name: What JWT is and how it works (signing, verification, claims)
+
+# ─── SERVICE MAP ──────────────────────────────────────────────────────────────
+# api-gateway        :8080  — routing, JWT verify, rate limit (no business logic)
+# url-service        :8081  — shorten, resolve, CRUD (owns: urls DB + Redis cache)
+# analytics-service  :8082  — click events, stats queries (owns: analytics DB)
+# user-service       :8083  — register, login, JWT issue (owns: users DB)
+# notification-service :8084 — email/webhook alerts via events (owns: notifications DB)
+#
+# Shared infrastructure (not owned by any service):
+#   Redis :6379 — used by url-service (redirect cache) + gateway (rate limit counters)
+#
+# Sync  (HTTP): Gateway → url-service (shorten/resolve), Gateway → user-service (auth)
+# Cache (Redis): url-service ↔ Redis [url:{code}] TTL=1h (read-through, invalidate on DELETE)
+# Rate  (Redis): gateway ↔ Redis [ratelimit:{ip}:{route}] INCR+EXPIRE 60s window
+# Async (AMQP): url-service → [url.clicked] → analytics-service
+#               url-service → [url.created, url.deleted] → notification-service
+#               analytics-service → [milestone.reached] → notification-service
+# ──────────────────────────────────────────────────────────────────────────────
+
+milestones:
+  # ────────────────────────────────────────────────────────────────────────────
+  - id: url-shortener-m1
+    name: "Foundation: Repo Layout, Shared Contracts, Local Dev Stack"
+    description: >
+      Establish the monorepo structure, define the shared domain event schema,
+      wire up Docker Compose with one PostgreSQL instance per service and one
+      RabbitMQ instance, and verify all containers start and can reach each other.
+      No business logic yet — this milestone is entirely about the skeleton that
+      every subsequent milestone builds on.
+    estimated_hours: 4-6
+
+    acceptance_criteria:
+      - >
+        Monorepo layout exists: services/{url,analytics,user,notification}-service/,
+        gateway/, shared/events/, docker-compose.yml at root
+      - >
+        Each service directory contains: main.go, Dockerfile, go.mod with module path
+        github.com/yourhandle/url-shortener/{service-name}
+      - >
+        docker-compose.yml declares five services (4 app + 1 gateway stub), four
+        PostgreSQL containers (url_db, analytics_db, user_db, notification_db) each
+        on separate ports (5432-5435), one RabbitMQ container with management UI,
+        and one Redis container (port 6379) — shared cache layer, not a service DB
+      - >
+        Each app service connects to its own DB on startup using pgxpool with
+        MaxConns=10, MinConns=2 configured via environment variables — logs
+        "connected to DB" and fails to start (non-zero exit) if DB is unreachable
+      - >
+        url-service connects to Redis on startup; logs "connected to Redis cache"
+        — Redis unavailability must NOT crash the service (cache is optional, DB is not)
+      - >
+        RabbitMQ exchange "url-shortener" of type "topic" is declared on startup by
+        url-service; queues "analytics.clicks" and "notifications.events" are declared
+        and bound by their respective consumers
+      - >
+        shared/events/ package defines Go structs for all domain events:
+        URLCreatedEvent, URLClickedEvent, URLDeletedEvent, MilestoneReachedEvent —
+        each with EventType string, OccurredAt time.Time, and payload fields
+      - >
+        `docker compose up` brings everything healthy; `docker compose down -v` tears
+        it down cleanly; README documents both commands
+      - >
+        Each service has a GET /health endpoint returning {"status":"ok","service":"<name>"}
+        with 200 — gateway health-checks all four services on startup
+
+    pitfalls:
+      - >
+        Hardcoding localhost instead of Docker service name (e.g., "url_db") in
+        connection strings — services can't reach each other inside Docker network
+      - >
+        Single shared PostgreSQL instance with multiple databases — violates
+        database-per-service; each service needs its own container
+      - >
+        Declaring RabbitMQ queues only in the producer — consumer must declare its
+        own queue and binding or messages are lost if consumer starts first
+      - >
+        Not adding depends_on + healthcheck in docker-compose — services crash-loop
+        because DB isn't ready when the app starts
+      - >
+        Using Redis as a database for service-owned data — Redis here is a cache only;
+        all writes go to PostgreSQL first, Redis holds read copies with TTL
+
+    concepts:
+      - Monorepo layout for microservices
+      - Database-per-service pattern
+      - AMQP exchange/queue/binding topology
+      - Docker Compose service dependencies and healthchecks
+      - Domain event schema design
+      - Connection pooling (pgxpool MaxConns/MinConns)
+      - Cache-aside vs read-through cache pattern
+
+    deliverables:
+      - Monorepo directory structure with all service skeletons
+      - docker-compose.yml with 4 PostgreSQL + 1 RabbitMQ + 1 Redis + 5 app containers
+      - shared/events/ package with all domain event structs
+      - /health endpoint on each service
+      - README with setup and run instructions
+
+  # ────────────────────────────────────────────────────────────────────────────
+  - id: url-shortener-m2
+    name: "User Service: Registration, Login, JWT Issuance"
+    description: >
+      Implement the User Service as a self-contained auth provider. It stores
+      users in its own PostgreSQL table, hashes passwords with bcrypt, and issues
+      signed JWT tokens. It does NOT call any other service. Other services verify
+      tokens locally using the shared secret — they never call User Service per request.
+    estimated_hours: 6-8
+
+    acceptance_criteria:
+      - >
+        users table: id UUID PK, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT now()
+      - >
+        POST /register accepts {email, password}, validates email format and
+        password length >= 8, hashes with bcrypt cost=12, returns 201 {user_id, email}
+        — never returns the hash
+      - >
+        POST /login accepts {email, password}, verifies bcrypt hash, returns 200
+        {token, expires_at} or 401 with no detail (do not reveal whether email exists)
+      - >
+        JWT payload contains: sub (user_id UUID), email, iat, exp (24h), iss "url-shortener"
+      - >
+        JWT is signed with HS256 using secret from environment variable JWT_SECRET —
+        no hardcoded secrets anywhere in source code
+      - >
+        GET /me requires Authorization: Bearer <token> header, verifies signature and
+        expiry locally (no DB lookup), returns {user_id, email} or 401
+      - >
+        Duplicate email on /register returns 409 Conflict, not 500
+      - >
+        All passwords rejected with 400 if < 8 chars; no other password complexity rules
+      - >
+        Integration test: register → login → GET /me round trip passes end-to-end
+
+    pitfalls:
+      - >
+        Storing plain-text passwords or using MD5/SHA — use bcrypt; cost < 10 is
+        acceptable for testing but document it
+      - >
+        Calling user-service from other services to validate tokens on every request —
+        stateless JWT means each service verifies the signature locally with the shared
+        secret; no inter-service call needed
+      - >
+        Returning 404 "user not found" on failed login — reveals email enumeration;
+        always return 401 with a generic message
+      - >
+        Putting user_id in JWT without making it a UUID — integer IDs are enumerable
+        and leak user count
+
+    concepts:
+      - Stateless JWT authentication
+      - bcrypt password hashing
+      - Token issuance vs token verification separation
+      - Email enumeration prevention
+      - Environment-based secret management
+
+    deliverables:
+      - users PostgreSQL schema with migration file
+      - POST /register, POST /login, GET /me handlers
+      - JWT signing and local verification middleware (reusable in other services)
+      - Integration test covering full auth round trip
+
+  # ────────────────────────────────────────────────────────────────────────────
+  - id: url-shortener-m3
+    name: "URL Service: Shorten, Redirect, CRUD + Domain Event Publishing"
+    description: >
+      Core business logic: accept a long URL, generate a collision-resistant 7-character
+      short code, store it, and redirect on lookup. On every redirect, publish a
+      URLClickedEvent to RabbitMQ using the outbox pattern so analytics is updated
+      asynchronously without coupling the redirect hot path to analytics availability.
+    estimated_hours: 10-12
+
+    acceptance_criteria:
+      - >
+        urls table: id UUID PK, short_code VARCHAR(10) UNIQUE NOT NULL,
+        original_url TEXT NOT NULL, user_id UUID NOT NULL, created_at TIMESTAMPTZ,
+        expires_at TIMESTAMPTZ NULLABLE, is_active BOOLEAN DEFAULT true;
+        migration includes: CREATE INDEX idx_urls_short_code ON urls(short_code);
+        CREATE INDEX idx_urls_user_id_created ON urls(user_id, created_at DESC)
+      - >
+        outbox table: id UUID PK, event_type TEXT, payload JSONB, created_at TIMESTAMPTZ,
+        published_at TIMESTAMPTZ NULLABLE — same DB as urls, same transaction
+      - >
+        POST /shorten requires valid JWT (verified locally); accepts {url, custom_code?,
+        expires_at?}; validates URL format (must have scheme + host); generates 7-char
+        base62 code if custom_code not provided; returns 201 {short_code, short_url,
+        original_url, expires_at}
+      - >
+        Short code generation uses crypto/rand for randomness — not math/rand; collision
+        retry up to 5 times before returning 503
+      - >
+        GET /:code redirect implements read-through cache: check Redis key
+        "url:{short_code}" first (TTL=1h or min(expires_at - now, 1h)); on miss,
+        query PostgreSQL, populate cache, return 301; on Redis error, fall through
+        to DB silently — cache failure must never cause redirect failure
+      - >
+        Redis cache entry stores JSON: {original_url, expires_at, is_active} —
+        enough to serve the redirect without hitting PostgreSQL on cache hit;
+        cache does NOT store the outbox event (that always goes to DB)
+      - >
+        Outbox poller runs as a worker pool of 3 goroutines (not one goroutine):
+        coordinator polls every 2s for unpublished rows (LIMIT 50, ORDER BY created_at),
+        fans out to workers via buffered channel; each worker publishes one event and
+        marks published_at — handles RabbitMQ unavailability gracefully (retry next cycle)
+      - >
+        GET /urls uses cursor-based pagination (after=<uuid>) not LIMIT/OFFSET —
+        avoids full table scan skipping N rows; query plan must use idx_urls_user_id_created
+      - >
+        GET /urls (auth required) returns paginated list of caller's URLs with
+        {short_code, original_url, created_at, expires_at, is_active}
+      - >
+        DELETE /urls/:code (auth required, owner only) sets is_active=false, publishes
+        URLDeletedEvent via outbox, and invalidates Redis cache key "url:{short_code}"
+        — cache invalidation is best-effort; failure is logged but does not fail the request
+      - >
+        Expired URLs (expires_at < now) return 410 Gone, not 404
+      - >
+        GET /:code for non-existent code returns 404; for inactive URL returns 410
+
+    pitfalls:
+      - >
+        Writing click event to outbox in a separate transaction from the URL lookup —
+        if the service crashes between the two transactions, the event is lost; they
+        must be one atomic transaction
+      - >
+        Calling analytics-service synchronously on redirect — this couples availability
+        of analytics to the redirect hot path; a slow analytics service will slow down
+        every redirect
+      - >
+        Using math/rand for short code generation — predictable codes can be enumerated;
+        use crypto/rand
+      - >
+        Not checking URL ownership on DELETE — any authenticated user could delete
+        another user's URL
+      - >
+        Polling outbox too aggressively (every 10ms) hammers the DB; too slowly (every
+        60s) means stale analytics; 2-5s is the right balance for this project
+      - >
+        Caching without TTL — a Redis entry for a URL with expires_at must not outlive
+        that expiry; set TTL = min(expires_at - now, 1h); never cache with no expiry
+      - >
+        Skipping cache invalidation on DELETE — if Redis still has the entry, deleted
+        URLs will continue to redirect for up to 1h; DEL the key on deactivation
+
+    concepts:
+      - Outbox pattern (guaranteed at-least-once event delivery)
+      - Atomic write + event in single transaction
+      - Base62 encoding for short codes
+      - Async decoupling via domain events
+      - Redirect semantics (301 vs 302, expires_at → 410)
+      - Read-through cache pattern with TTL
+      - Cache invalidation on mutation
+      - Worker pool for concurrent outbox processing
+      - Cursor-based pagination vs LIMIT/OFFSET
+
+    deliverables:
+      - urls and outbox PostgreSQL schema with migration files and indexes
+      - POST /shorten, GET /:code (redirect with Redis cache), GET /urls, DELETE /urls/:code
+      - Outbox worker pool (coordinator + 3 worker goroutines) with RabbitMQ publish
+      - Redis cache layer: get/set/del helpers with error isolation
+      - JWT middleware for protected routes (reuse from M2 package)
+      - Unit tests for short code generation (collision, base62 alphabet)
+      - Benchmark: redirect handler must serve from cache in < 5ms p99 under 100 concurrent requests
+
+  # ────────────────────────────────────────────────────────────────────────────
+  - id: url-shortener-m4
+    name: "Analytics Service: Click Ingestion + Stats API"
+    description: >
+      Consume URLClickedEvent from RabbitMQ, store click records, and expose
+      a stats API. Analytics service never calls URL Service — it only reads from
+      its own DB populated by events. This milestone demonstrates the read-side of
+      event-driven architecture and the query responsibility of a downstream consumer.
+    estimated_hours: 8-10
+
+    acceptance_criteria:
+      - >
+        clicks table: id UUID PK, short_code TEXT NOT NULL, clicked_at TIMESTAMPTZ,
+        ip_hash TEXT (SHA-256 of IP, not raw IP — privacy), user_agent TEXT,
+        referer TEXT NULLABLE;
+        migration includes: CREATE INDEX idx_clicks_short_code_time ON clicks(short_code, clicked_at DESC);
+        CREATE INDEX idx_clicks_referer ON clicks(short_code, referer) WHERE referer IS NOT NULL
+      - >
+        milestones table: id UUID PK, short_code TEXT, milestone INT,
+        triggered_at TIMESTAMPTZ — records when 10, 100, 1000 click thresholds are crossed
+      - >
+        RabbitMQ consumer subscribes to queue "analytics.clicks", bound to exchange
+        "url-shortener" with routing key "url.clicked"; processes URLClickedEvent,
+        inserts click row, checks milestone thresholds, publishes MilestoneReachedEvent
+        if threshold crossed — all in one DB transaction
+      - >
+        GET /stats/:code returns {short_code, total_clicks, clicks_last_24h,
+        clicks_last_7d, top_referers: [{referer, count}] top 5} — no auth required
+        (public stats)
+      - >
+        GET /stats/:code/timeline?interval=day|hour returns [{period, clicks}] array
+        — use PostgreSQL date_trunc for bucketing
+      - >
+        Consumer is idempotent: duplicate URLClickedEvent (same event id) is ignored
+        using event_id deduplication table; reprocessing the same message does not
+        double-count clicks
+      - >
+        Consumer handles poison messages (malformed JSON) by logging and acking —
+        does not crash the consumer loop or block the queue
+      - >
+        GET /health returns healthy even when RabbitMQ is temporarily down (consumer
+        pauses, service stays up)
+
+    pitfalls:
+      - >
+        Storing raw IP addresses — a GDPR violation; store SHA-256(IP+salt) or just
+        drop it; the spec uses ip_hash
+      - >
+        Calling url-service to validate short_code existence before inserting click —
+        creates sync dependency; trust the event, insert unconditionally
+      - >
+        Not implementing idempotency — RabbitMQ delivers at-least-once; the same click
+        event can arrive twice (broker restart, consumer crash during ack); without
+        deduplication, clicks are double-counted
+      - >
+        Panicking on malformed message body — always recover; log and ack or nack
+        to dead-letter queue; never crash the consumer goroutine
+
+    concepts:
+      - Event consumer idempotency
+      - At-least-once delivery semantics
+      - Privacy-preserving analytics (IP hashing)
+      - Downstream read model populated by events
+      - PostgreSQL date_trunc for time-series bucketing
+
+    deliverables:
+      - clicks, milestones, processed_events (dedup) PostgreSQL schema
+      - RabbitMQ consumer goroutine with idempotency check
+      - GET /stats/:code and GET /stats/:code/timeline handlers
+      - MilestoneReachedEvent publishing when thresholds crossed
+      - Test: send duplicate URLClickedEvent, verify click count = 1
+
+  # ────────────────────────────────────────────────────────────────────────────
+  - id: url-shortener-m5
+    name: "Notification Service + API Gateway + Circuit Breaker"
+    description: >
+      Wire up the last two infrastructure pieces: the Notification Service consumes
+      URLCreatedEvent and MilestoneReachedEvent and logs (or sends) alerts; the API
+      Gateway provides the single client entry point with JWT verification, routing,
+      and a circuit breaker protecting the URL Service redirect path. This milestone
+      completes the full end-to-end system.
+    estimated_hours: 10-12
+
+    acceptance_criteria:
+      - >
+        notifications table: id UUID PK, user_id UUID, event_type TEXT, payload JSONB,
+        status TEXT (pending|sent|failed), created_at TIMESTAMPTZ, sent_at TIMESTAMPTZ NULLABLE
+      - >
+        Notification Service consumes routing keys "url.created", "url.deleted",
+        "milestone.reached" from queue "notifications.events"; for each event inserts
+        a notification row with status=pending, logs the notification (email sending
+        is mocked — log "would send email to <user>: <message>"), updates status=sent
+      - >
+        GET /notifications (auth required) returns caller's notifications sorted by
+        created_at DESC, paginated — notification service verifies JWT locally
+      - >
+        API Gateway routes: POST /api/shorten → url-service, GET /api/urls → url-service,
+        DELETE /api/urls/:code → url-service, GET /r/:code → url-service (redirect),
+        GET /api/stats/:code → analytics-service, POST /api/auth/register → user-service,
+        POST /api/auth/login → user-service, GET /api/notifications → notification-service
+      - >
+        Gateway validates JWT on all /api/* routes except /api/auth/*; rejects with
+        401 before forwarding — downstream services also validate but gateway is first line
+      - >
+        Gateway enforces per-IP rate limiting using token bucket stored in Redis:
+        POST /api/shorten: 10 requests/minute per IP; GET /r/:code: 300 requests/minute
+        per IP; exceeded limit returns 429 Too Many Requests with Retry-After header;
+        rate limit counters use Redis INCR + EXPIRE with 60s window
+      - >
+        Gateway implements circuit breaker on url-service proxy: after 5 consecutive
+        failures within 10s, opens circuit and returns 503 {"error":"service unavailable"}
+        for 30s before attempting half-open probe; uses a simple state machine
+        (closed → open → half-open → closed)
+      - >
+        Gateway adds X-Correlation-ID header (UUID, generated if not present) to every
+        forwarded request; all services log this ID in every log line for that request
+      - >
+        All services use structured JSON logging: {"level","time","service","correlation_id",
+        "method","path","status","duration_ms","msg"} — no fmt.Println in handlers
+      - >
+        End-to-end test: register user → login → shorten URL → GET redirect → check
+        /stats → check /notifications — all pass through gateway, correlation ID
+        appears in logs of every service involved
+
+    pitfalls:
+      - >
+        Putting business logic in the gateway (e.g., checking URL ownership, computing
+        stats) — gateway must only route, auth, and protect; zero domain logic
+      - >
+        Implementing circuit breaker as sleep/retry — a real circuit breaker has three
+        states (closed/open/half-open) and a state machine; a retry loop is not a
+        circuit breaker
+      - >
+        Notification service calling user-service to look up email — it should receive
+        the user context it needs in the event payload; if URLCreatedEvent includes
+        user_id and email, no cross-service call is needed
+      - >
+        Not propagating X-Correlation-ID through async events — event payloads should
+        include correlation_id so log traces can be followed across the message broker
+      - >
+        Rate limiting with in-memory counters in a multi-replica gateway — counters are
+        per-process; use Redis INCR for shared rate limit state across replicas
+
+    concepts:
+      - API Gateway pattern (routing, auth, cross-cutting concerns only)
+      - Circuit breaker state machine (closed → open → half-open)
+      - Correlation ID propagation across sync and async boundaries
+      - Structured JSON logging for distributed systems
+      - Event payload design (include enough context to avoid callbacks)
+      - Token bucket rate limiting with Redis INCR + EXPIRE
+      - Redis dual role: cache (url-service) and rate limit store (gateway)
+
+    deliverables:
+      - Notification Service with RabbitMQ consumer and GET /notifications
+      - API Gateway with routing table, JWT middleware, circuit breaker, rate limiter
+      - Structured JSON logger shared across all services (shared/logger package)
+      - X-Correlation-ID middleware in gateway and propagation in all services
+      - End-to-end integration test through gateway
+      - Rate limit test: POST /api/shorten 11x from same IP → 11th returns 429
+
+# ─── ANTI-PATTERNS EXPLICITLY BANNED ─────────────────────────────────────────
+anti_patterns:
+  - name: Shared Database
+    description: >
+      Any two services pointing at the same PostgreSQL instance or schema.
+      Each service owns its data; cross-service data needs come from events or
+      API calls, never direct DB joins.
+  - name: Synchronous Call Chain
+    description: >
+      Gateway calls URL Service which calls Analytics Service which calls
+      Notification Service. A chain of depth > 1 is a distributed monolith.
+      In this system: redirect writes to outbox, analytics reads from queue.
+      The only sync chains allowed are Gateway → one downstream service.
+  - name: God Service
+    description: >
+      A single service handling auth + URL logic + analytics. If a service
+      has more than one bounded context it should be split.
+  - name: Chatty Service
+    description: >
+      Analytics calling URL Service on every click to validate the short_code.
+      Downstream consumers trust events; they do not call back to producers.

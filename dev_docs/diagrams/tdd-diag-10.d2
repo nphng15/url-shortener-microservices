@@ -1,0 +1,422 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+direction: right
+title: |md
+  ## JWT Claims Layout and Shared Verification Flow
+  `shared/auth` · HS256 · Stateless · No DB lookup during verification
+| {near: top-center}
+# ─── TOKEN WIRE FORMAT ────────────────────────────────────────────────────────
+token_wire: "Compact Serialization (wire format)" {
+  style.fill: "#1e1e2e"
+  style.stroke: "#6c7086"
+  style.font-color: white
+  style.border-radius: 8
+  h_seg: |md
+    `base64url(Header)`
+  | {
+    style.fill: "#7c3aed"
+    style.stroke: "#6d28d9"
+    style.font-color: white
+    style.border-radius: 4
+  }
+  dot1: "·" {
+    style.fill: "#1e1e2e"
+    style.stroke: "#1e1e2e"
+    style.font-color: "#f38ba8"
+    style.font-size: 28
+    style.bold: true
+  }
+  p_seg: |md
+    `base64url(Payload)`
+  | {
+    style.fill: "#1d4ed8"
+    style.stroke: "#1e40af"
+    style.font-color: white
+    style.border-radius: 4
+  }
+  dot2: "·" {
+    style.fill: "#1e1e2e"
+    style.stroke: "#1e1e2e"
+    style.font-color: "#f38ba8"
+    style.font-size: 28
+    style.bold: true
+  }
+  s_seg: |md
+    `base64url(Signature)`
+  | {
+    style.fill: "#065f46"
+    style.stroke: "#047857"
+    style.font-color: white
+    style.border-radius: 4
+  }
+  h_seg -> dot1
+  dot1  -> p_seg
+  p_seg -> dot2
+  dot2  -> s_seg
+}
+# ─── HEADER BLOCK ─────────────────────────────────────────────────────────────
+header_block: "JWT Header  [6 bytes JSON → 8 bytes base64url]" {
+  style.fill: "#3b0764"
+  style.stroke: "#7c3aed"
+  style.font-color: "#e9d5ff"
+  style.border-radius: 6
+  alg: |md
+    **alg**  
+    `"HS256"`  
+    HMAC-SHA256 only — key func rejects all other algs
+  | {
+    style.fill: "#4c1d95"
+    style.stroke: "#7c3aed"
+    style.font-color: "#e9d5ff"
+    style.border-radius: 4
+  }
+  typ: |md
+    **typ**  
+    `"JWT"`  
+    Standard type claim
+  | {
+    style.fill: "#4c1d95"
+    style.stroke: "#7c3aed"
+    style.font-color: "#e9d5ff"
+    style.border-radius: 4
+  }
+  alg -> typ: "json"
+}
+# ─── PAYLOAD BLOCK ────────────────────────────────────────────────────────────
+payload_block: "JWT Payload  (Claims struct in shared/auth)" {
+  style.fill: "#1e3a5f"
+  style.stroke: "#3b82f6"
+  style.font-color: "#bfdbfe"
+  style.border-radius: 6
+  sub_field: |md
+    **sub** `string`  
+    UUID v4 — user_id  
+    Non-enumerable; from users.id
+  | {
+    style.fill: "#1e40af"
+    style.stroke: "#3b82f6"
+    style.font-color: "#bfdbfe"
+    style.border-radius: 4
+  }
+  email_field: |md
+    **email** `string`  
+    Denormalized from users.email  
+    Avoids DB lookup in downstream services
+  | {
+    style.fill: "#1e40af"
+    style.stroke: "#3b82f6"
+    style.font-color: "#bfdbfe"
+    style.border-radius: 4
+  }
+  iss_field: |md
+    **iss** `string`  
+    `"url-shortener"`  
+    Verified in VerifyToken step 6
+  | {
+    style.fill: "#1e40af"
+    style.stroke: "#3b82f6"
+    style.font-color: "#bfdbfe"
+    style.border-radius: 4
+  }
+  iat_field: |md
+    **iat** `int64`  
+    Unix timestamp — issued-at  
+    `time.Now().Unix()`
+  | {
+    style.fill: "#1e40af"
+    style.stroke: "#3b82f6"
+    style.font-color: "#bfdbfe"
+    style.border-radius: 4
+  }
+  exp_field: |md
+    **exp** `int64`  
+    Unix timestamp — expiry  
+    `iat + cfg.TokenTTL` (default +86400s = 24 h)  
+    Auto-validated by golang-jwt on Parse
+  | {
+    style.fill: "#1e40af"
+    style.stroke: "#3b82f6"
+    style.font-color: "#bfdbfe"
+    style.border-radius: 4
+  }
+  sub_field -> email_field -> iss_field -> iat_field -> exp_field
+}
+# ─── SIGNATURE BLOCK ──────────────────────────────────────────────────────────
+sig_block: "JWT Signature  (32 bytes)" {
+  style.fill: "#064e3b"
+  style.stroke: "#10b981"
+  style.font-color: "#d1fae5"
+  style.border-radius: 6
+  hmac_op: |md
+    **HMAC-SHA256**  
+    `input = base64url(Header) + "." + base64url(Payload)`  
+    `key   = []byte(JWT_SECRET)`  
+    output = 32 bytes → base64url-encoded
+  | {
+    style.fill: "#065f46"
+    style.stroke: "#10b981"
+    style.font-color: "#d1fae5"
+    style.border-radius: 4
+  }
+  secret_src: |md
+    **JWT_SECRET**  
+    env var — loaded once at startup  
+    Stored in `Config.JWTSecret`  
+    Identical across: user-service,  
+    url-service, analytics-service,  
+    notification-service, gateway
+  | {
+    style.fill: "#065f46"
+    style.stroke: "#f59e0b"
+    style.font-color: "#fef3c7"
+    style.border-radius: 4
+    style.stroke-width: 2
+  }
+  secret_src -> hmac_op: "[]byte(secret)"
+}
+# ─── SHARED/AUTH PACKAGE ──────────────────────────────────────────────────────
+shared_auth: "shared/auth  (package)" {
+  style.fill: "#2d1b69"
+  style.stroke: "#8b5cf6"
+  style.font-color: "#ede9fe"
+  style.border-radius: 8
+  style.stroke-width: 2
+  jwt_middleware: "JWTMiddleware(secret string) func(http.Handler) http.Handler" {
+    style.fill: "#3b1f8c"
+    style.stroke: "#8b5cf6"
+    style.font-color: "#ede9fe"
+    style.border-radius: 6
+    step_read: |md
+      **Step 1** — Read header  
+      `r.Header.Get("Authorization")`  
+      → absent → **401** `"authorization header required"`
+    | {
+      style.fill: "#4c2c9e"
+      style.stroke: "#8b5cf6"
+      style.font-color: "#ede9fe"
+      style.border-radius: 4
+    }
+    step_strip: |md
+      **Step 2** — Strip prefix  
+      Must start with `"Bearer "`  (with space)  
+      → wrong format → **401** `"invalid authorization header format"`  
+      → empty token → **401** `"token is required"`
+    | {
+      style.fill: "#4c2c9e"
+      style.stroke: "#8b5cf6"
+      style.font-color: "#ede9fe"
+      style.border-radius: 4
+    }
+    step_verify: |md
+      **Step 3** — Verify token  
+      Calls `VerifyToken(tokenString, secret)`  
+      → ErrTokenInvalid → **401** `"unauthorized"`
+    | {
+      style.fill: "#4c2c9e"
+      style.stroke: "#8b5cf6"
+      style.font-color: "#ede9fe"
+      style.border-radius: 4
+    }
+    step_inject: |md
+      **Step 4** — Inject Claims  
+      `ctx = context.WithValue(ctx, claimsKey{}, claims)`  
+      `next.ServeHTTP(w, r.WithContext(ctx))`  
+      **NO DB LOOKUP — pure computation**
+    | {
+      style.fill: "#4c2c9e"
+      style.stroke: "#10b981"
+      style.font-color: "#d1fae5"
+      style.border-radius: 4
+      style.stroke-width: 2
+    }
+    step_read -> step_strip -> step_verify -> step_inject
+  }
+  verify_fn: "VerifyToken(tokenString, secret string) (*Claims, error)" {
+    style.fill: "#3b1f8c"
+    style.stroke: "#8b5cf6"
+    style.font-color: "#ede9fe"
+    style.border-radius: 6
+    v1: |md
+      **Step 1** `jwt.Parse(tokenString, keyFunc)`  
+      keyFunc checks `token.Method.(*jwt.SigningMethodHMAC)`  
+      → not HMAC → reject (algorithm confusion attack guard)
+    | {
+      style.fill: "#4c2c9e"
+      style.stroke: "#8b5cf6"
+      style.font-color: "#ede9fe"
+      style.border-radius: 4
+    }
+    v2: |md
+      **Step 2** Check `token.Valid`  
+      golang-jwt auto-validates `exp` claim  
+      → expired → ErrTokenInvalid
+    | {
+      style.fill: "#4c2c9e"
+      style.stroke: "#8b5cf6"
+      style.font-color: "#ede9fe"
+      style.border-radius: 4
+    }
+    v3: |md
+      **Step 3** Extract `jwt.MapClaims`  
+      Safe string extraction via helper  
+      → missing/wrong-type field → ErrTokenInvalid
+    | {
+      style.fill: "#4c2c9e"
+      style.stroke: "#8b5cf6"
+      style.font-color: "#ede9fe"
+      style.border-radius: 4
+    }
+    v4: |md
+      **Step 4** Verify `iss == "url-shortener"`  
+      → wrong issuer → ErrTokenInvalid  
+      → all failures return opaque ErrTokenInvalid  
+         (no detail leakage to caller)
+    | {
+      style.fill: "#4c2c9e"
+      style.stroke: "#8b5cf6"
+      style.font-color: "#ede9fe"
+      style.border-radius: 4
+    }
+    v5: |md
+      **Step 5** Return `*Claims`  
+      `{Sub, Email, Iss, Iat, Exp}`
+    | {
+      style.fill: "#1e40af"
+      style.stroke: "#3b82f6"
+      style.font-color: "#bfdbfe"
+      style.border-radius: 4
+    }
+    v1 -> v2 -> v3 -> v4 -> v5
+  }
+  claims_from_ctx: |md
+    **ClaimsFromContext**(ctx) (*Claims, bool)  
+    `ctx.Value(claimsKey{}).(*Claims)`  
+    Used by handlers to read verified identity  
+    Returns (nil, false) if middleware not applied
+  | {
+    style.fill: "#3b1f8c"
+    style.stroke: "#8b5cf6"
+    style.font-color: "#ede9fe"
+    style.border-radius: 6
+  }
+  jwt_middleware -> verify_fn: "delegates to"
+  verify_fn -> claims_from_ctx: "populates context consumed by"
+}
+# ─── REQUEST CONTEXT ──────────────────────────────────────────────────────────
+req_ctx: "request context (per-goroutine)" {
+  style.fill: "#1c1c1c"
+  style.stroke: "#6b7280"
+  style.font-color: "#e5e7eb"
+  style.border-radius: 6
+  ctx_key: |md
+    **claimsKey{}**  (unexported struct type)  
+    Prevents collisions with other packages  
+    Value: `*auth.Claims`
+  | {
+    style.fill: "#27272a"
+    style.stroke: "#6b7280"
+    style.font-color: "#e5e7eb"
+    style.border-radius: 4
+  }
+  ctx_claims: |md
+    **Claims injected:**  
+    `Sub`   = "550e8400-e29b-41d4-a716-446655440000"  
+    `Email` = "user@example.com"  
+    `Iss`   = "url-shortener"  
+    `Iat`   = 1772620800  
+    `Exp`   = 1772707200  (iat + 86400)
+  | {
+    style.fill: "#1e40af"
+    style.stroke: "#3b82f6"
+    style.font-color: "#bfdbfe"
+    style.border-radius: 4
+  }
+  ctx_key -> ctx_claims: "stores"
+}
+# ─── DOWNSTREAM HANDLERS ──────────────────────────────────────────────────────
+downstream: "Downstream handlers (all services)" {
+  style.fill: "#14532d"
+  style.stroke: "#16a34a"
+  style.font-color: "#dcfce7"
+  style.border-radius: 6
+  handler_read: |md
+    `claims, ok := auth.ClaimsFromContext(r.Context())`  
+    `claims.Sub`   → user_id for ownership checks  
+    `claims.Email` → embed in domain events  
+    **Zero network calls — O(1) context lookup**
+  | {
+    style.fill: "#166534"
+    style.stroke: "#16a34a"
+    style.font-color: "#dcfce7"
+    style.border-radius: 4
+  }
+  no_db_note: |md
+    ⚠ **NO DB LOOKUP during verification**  
+    Token is self-contained — HMAC proves authenticity  
+    user-service is called ONLY at login to issue tokens  
+    Every subsequent request: local HMAC verify only
+  | {
+    style.fill: "#14532d"
+    style.stroke: "#f59e0b"
+    style.font-color: "#fef3c7"
+    style.border-radius: 4
+    style.stroke-width: 2
+    style.bold: true
+  }
+  handler_read -> no_db_note
+}
+# ─── CONSUMERS OF SHARED/AUTH ─────────────────────────────────────────────────
+consumers: "Services importing shared/auth" {
+  style.fill: "#1c1c1c"
+  style.stroke: "#6b7280"
+  style.font-color: "#e5e7eb"
+  style.border-radius: 6
+  user_svc: "user-service\n/register  /login  /me" {
+    style.fill: "#3b0764"
+    style.stroke: "#7c3aed"
+    style.font-color: "#e9d5ff"
+    style.border-radius: 4
+  }
+  url_svc: "url-service\n/shorten  /urls  DELETE /urls/:code" {
+    style.fill: "#1e3a5f"
+    style.stroke: "#3b82f6"
+    style.font-color: "#bfdbfe"
+    style.border-radius: 4
+  }
+  notif_svc: "notification-service\nGET /notifications" {
+    style.fill: "#064e3b"
+    style.stroke: "#10b981"
+    style.font-color: "#d1fae5"
+    style.border-radius: 4
+  }
+  gateway_svc: "gateway\nall /api/* routes" {
+    style.fill: "#4c1d05"
+    style.stroke: "#f59e0b"
+    style.font-color: "#fef3c7"
+    style.border-radius: 4
+  }
+}
+# ─── CONNECTIONS ──────────────────────────────────────────────────────────────
+header_block -> token_wire: "encodes to"
+payload_block -> token_wire: "encodes to"
+sig_block -> token_wire: "appended as"
+token_wire -> shared_auth.jwt_middleware: "Authorization: Bearer <token>"
+shared_auth.jwt_middleware -> req_ctx: "context.WithValue(ctx, claimsKey{}, claims)"
+req_ctx -> downstream: "r.Context() passed to next handler"
+shared_auth -> consumers: "imported by" {
+  style.stroke-dash: 4
+  style.stroke: "#6b7280"
+}
+consumers.user_svc -> shared_auth: "issues tokens via\njwtTokenIssuer.Issue()" {
+  style.stroke: "#7c3aed"
+  style.stroke-dash: 3
+}
+sig_block.secret_src -> shared_auth: "JWT_SECRET env var\nsame value across all services" {
+  style.stroke: "#f59e0b"
+  style.stroke-width: 2
+  style.animated: true
+}

@@ -1,0 +1,284 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 6
+  }
+}
+title: |md
+  ## GET /:code — Read-Through Cache State Machine
+  **url-service** · Redis → PostgreSQL fallback · Circuit: Redis errors are non-fatal
+| {near: top-center}
+# ── Initial state ────────────────────────────────────────────────────────────
+initial: "" {
+  shape: circle
+  style.fill: "#1a1a2e"
+  style.stroke: "#1a1a2e"
+  width: 24
+  height: 24
+  label: ""
+}
+# ── States ───────────────────────────────────────────────────────────────────
+REQUEST: "REQUEST\nExtract {code} from path\nBuild key: url:{code}" {
+  style.fill: "#3d2b6b"
+  style.stroke: "#9b72cf"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 6
+}
+REDIS_GET: "REDIS GET\nclient.Get(ctx50ms, \"url:{code}\")\nctx timeout: 50ms" {
+  style.fill: "#2d4a7a"
+  style.stroke: "#6ba3d6"
+  style.font-color: white
+  style.border-radius: 6
+}
+CACHE_HIT: "CACHE_HIT\nUnmarshal CachedURL\n{original_url, expires_at, is_active}" {
+  style.fill: "#1a4a3a"
+  style.stroke: "#4caf7d"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 6
+}
+CACHE_HIT_ACTIVE: "CACHE_HIT_ACTIVE\nInvariant: is_active=true\nexpires_at=nil OR future" {
+  style.fill: "#1a5c3a"
+  style.stroke: "#4caf7d"
+  style.font-color: white
+  style.border-radius: 6
+}
+CACHE_HIT_INACTIVE: "CACHE_HIT_INACTIVE\nis_active=false\nServe from cache — no DB needed" {
+  style.fill: "#5c2a1a"
+  style.stroke: "#cf6b4c"
+  style.font-color: white
+  style.border-radius: 6
+}
+CACHE_HIT_EXPIRED: "CACHE_HIT_EXPIRED\nexpires_at != nil\nAND expires_at.Before(now())" {
+  style.fill: "#5c3a1a"
+  style.stroke: "#cf9b4c"
+  style.font-color: white
+  style.border-radius: 6
+}
+CACHE_MISS: "CACHE_MISS\nredis.Nil returned\nFall through to DB" {
+  style.fill: "#3a2d5c"
+  style.stroke: "#9b72cf"
+  style.font-color: white
+  style.border-radius: 6
+}
+CACHE_ERROR: "CACHE_ERROR\nnon-Nil Redis error\nlog.Warn(\"redis get failed\")\nFall through to DB" {
+  style.fill: "#4a2a2a"
+  style.stroke: "#cf4c4c"
+  style.font-color: white
+  style.border-radius: 6
+}
+DB_QUERY: "DB QUERY\nFindByCode(ctx, code)\nSELECT ... WHERE short_code=\$1\nUses idx_urls_short_code" {
+  style.fill: "#2a3d5c"
+  style.stroke: "#6ba3d6"
+  style.font-color: white
+  style.border-radius: 6
+}
+DB_HIT: "DB_HIT\nRecord found\nEvaluate is_active + expires_at\nInvariant: row exists" {
+  style.fill: "#1a3d5c"
+  style.stroke: "#4c8bcf"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 6
+}
+DB_HIT_ACTIVE: "DB_HIT_ACTIVE\nis_active=true\nAND (expires_at=nil OR future)\nProceed to cache write" {
+  style.fill: "#1a4a5c"
+  style.stroke: "#4cb3cf"
+  style.font-color: white
+  style.border-radius: 6
+}
+EXPIRED: "EXPIRED\nis_active=true\nAND expires_at.Before(now())\nDo NOT cache" {
+  style.fill: "#5c4a1a"
+  style.stroke: "#cfaf4c"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 6
+}
+INACTIVE: "INACTIVE\nis_active=false\n(soft-deleted by DELETE /urls/:code)\nDo NOT cache" {
+  style.fill: "#5c2d1a"
+  style.stroke: "#cf6b4c"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 6
+}
+DB_MISS: "DB_MISS\npgx.ErrNoRows\nErrURLNotFound returned\nNothing to cache" {
+  style.fill: "#3d1a3d"
+  style.stroke: "#cf4ccf"
+  style.font-color: white
+  style.bold: true
+  style.border-radius: 6
+}
+REDIS_SET: "REDIS SET\ncache.Set(ctx100ms, code, CachedURL, expiresAt)\nTTL = min(remaining, 1h)\nNon-blocking; errors swallowed" {
+  style.fill: "#1a3a2a"
+  style.stroke: "#4caf7d"
+  style.font-color: white
+  style.border-radius: 6
+}
+OUTBOX_CLICK: "OUTBOX_CLICK\nBegin separate tx\nINSERT outbox(URLClickedEvent)\nCommit — non-fatal if fails" {
+  style.fill: "#2a2a3d"
+  style.stroke: "#9b9bcf"
+  style.font-color: white
+  style.border-radius: 6
+  style.stroke-dash: 4
+}
+# ── Terminal states ───────────────────────────────────────────────────────────
+RESP_301: "301 Moved Permanently\nLocation: {original_url}\nX-Correlation-ID echoed" {
+  style.fill: "#1a5c2a"
+  style.stroke: "#4caf5c"
+  style.font-color: white
+  style.bold: true
+  style.double-border: true
+  style.border-radius: 6
+}
+RESP_410_EXPIRED: "410 Gone\n{\"error\":\"url has expired\"}\nCache NOT populated" {
+  style.fill: "#5c4a1a"
+  style.stroke: "#cf9b4c"
+  style.font-color: white
+  style.bold: true
+  style.double-border: true
+  style.border-radius: 6
+}
+RESP_410_INACTIVE: "410 Gone\n{\"error\":\"url has been deactivated\"}\nCache NOT populated" {
+  style.fill: "#5c2a1a"
+  style.stroke: "#cf6b4c"
+  style.font-color: white
+  style.bold: true
+  style.double-border: true
+  style.border-radius: 6
+}
+RESP_404: "404 Not Found\n{\"error\":\"short url not found\"}\nCache NOT populated" {
+  style.fill: "#3d1a1a"
+  style.stroke: "#cf4c4c"
+  style.font-color: white
+  style.bold: true
+  style.double-border: true
+  style.border-radius: 6
+}
+# ── ILLEGAL state ─────────────────────────────────────────────────────────────
+ILLEGAL_500: "❌ ILLEGAL STATE\n500 on Redis error\nMUST fall through to DB\nRedis errors are non-fatal" {
+  style.fill: "#2a0000"
+  style.stroke: "#ff0000"
+  style.font-color: "#ff6666"
+  style.bold: true
+  style.border-radius: 6
+  style.stroke-dash: 3
+  style.stroke-width: 3
+}
+# ── Transitions ───────────────────────────────────────────────────────────────
+initial -> REQUEST: "HTTP GET /{code}" {
+  style.stroke: "#9b72cf"
+  style.stroke-width: 2
+}
+REQUEST -> REDIS_GET: "CorrelationIDMiddleware applied\nkey = \"url:\" + code" {
+  style.stroke: "#6ba3d6"
+}
+REDIS_GET -> CACHE_HIT: "result != redis.Nil\nAND err == nil\nunmarshal succeeds" {
+  style.stroke: "#4caf7d"
+  style.font-color: "#4caf7d"
+}
+REDIS_GET -> CACHE_MISS: "err == redis.Nil\n(key absent)" {
+  style.stroke: "#9b72cf"
+  style.stroke-dash: 4
+}
+REDIS_GET -> CACHE_ERROR: "err != nil\nAND err != redis.Nil\n(network, timeout)" {
+  style.stroke: "#cf4c4c"
+  style.stroke-dash: 4
+}
+CACHE_HIT -> CACHE_HIT_ACTIVE: "is_active=true\nAND not expired" {
+  style.stroke: "#4caf7d"
+}
+CACHE_HIT -> CACHE_HIT_INACTIVE: "is_active=false" {
+  style.stroke: "#cf6b4c"
+}
+CACHE_HIT -> CACHE_HIT_EXPIRED: "expires_at != nil\nAND expires_at.Before(now())" {
+  style.stroke: "#cf9b4c"
+}
+CACHE_HIT_ACTIVE -> OUTBOX_CLICK: "Redirect decided\nWrite click event (non-blocking)" {
+  style.stroke: "#9b9bcf"
+  style.stroke-dash: 4
+}
+OUTBOX_CLICK -> RESP_301: "pool.Begin → INSERT outbox\nCommit (or warn + continue)" {
+  style.stroke: "#4caf5c"
+  style.stroke-width: 2
+}
+CACHE_HIT_INACTIVE -> RESP_410_INACTIVE: "Serve from cache\nno DB round-trip" {
+  style.stroke: "#cf6b4c"
+  style.stroke-width: 2
+}
+CACHE_HIT_EXPIRED -> RESP_410_EXPIRED: "Serve from cache\nno DB round-trip" {
+  style.stroke: "#cf9b4c"
+  style.stroke-width: 2
+}
+CACHE_MISS -> DB_QUERY: "Fall through\nlog: nothing" {
+  style.stroke: "#6ba3d6"
+}
+CACHE_ERROR -> DB_QUERY: "Fall through\nlog.Warn(\"redis get failed\", key, err)" {
+  style.stroke: "#cf4c4c"
+}
+DB_QUERY -> DB_HIT: "row found\n(pgx.ErrNoRows NOT returned)" {
+  style.stroke: "#4c8bcf"
+}
+DB_QUERY -> DB_MISS: "pgx.ErrNoRows\n→ ErrURLNotFound" {
+  style.stroke: "#cf4ccf"
+}
+DB_HIT -> DB_HIT_ACTIVE: "is_active=true\nAND expires_at=nil\nOR expires_at.After(now())" {
+  style.stroke: "#4cb3cf"
+}
+DB_HIT -> EXPIRED: "is_active=true\nAND expires_at.Before(now())" {
+  style.stroke: "#cfaf4c"
+}
+DB_HIT -> INACTIVE: "is_active=false" {
+  style.stroke: "#cf6b4c"
+}
+DB_HIT_ACTIVE -> REDIS_SET: "cache.Set(ctx100ms, code,\nCachedURL{url,expiresAt,true},\nexpiresAt)" {
+  style.stroke: "#4cb3cf"
+}
+REDIS_SET -> OUTBOX_CLICK: "TTL set; errors swallowed\nWrite click event" {
+  style.stroke: "#9b9bcf"
+  style.stroke-dash: 4
+}
+EXPIRED -> RESP_410_EXPIRED: "Do NOT call cache.Set\n(would cache expired state)" {
+  style.stroke: "#cfaf4c"
+  style.stroke-width: 2
+}
+INACTIVE -> RESP_410_INACTIVE: "Do NOT call cache.Set\n(stale inactive cached)" {
+  style.stroke: "#cf6b4c"
+  style.stroke-width: 2
+}
+DB_MISS -> RESP_404: "ErrURLNotFound\nno cache write" {
+  style.stroke: "#cf4ccf"
+  style.stroke-width: 2
+}
+# ── ILLEGAL transition (red dashed) ──────────────────────────────────────────
+CACHE_ERROR -> ILLEGAL_500: "ILLEGAL\n(must NOT do this)" {
+  style.stroke: "#ff0000"
+  style.stroke-dash: 5
+  style.stroke-width: 3
+  style.font-color: "#ff4444"
+}
+# ── Annotations ───────────────────────────────────────────────────────────────
+cache_note: |md
+  **Cache TTL Policy**
+  - `expires_at = nil` → TTL = 1h (defaultCacheTTL)
+  - `expires_at` in future → TTL = min(remaining, 1h)
+  - `expires_at` in past → never cached (returns 410)
+  - `is_active = false` → never cached after deactivation
+    (DELETE /urls/:code calls cache.Del before returning 204)
+| {
+  near: bottom-left
+  style.fill: "#1a1a2e"
+  style.stroke: "#3d2b6b"
+  style.font-color: "#c8b8ff"
+}
+click_note: |md
+  **Click Event Atomicity**
+  Separate transaction from redirect.
+  If commit fails after 301 sent → event lost.
+  Acceptable: at-least-once for writes,
+  not for already-sent HTTP responses.
+| {
+  near: bottom-right
+  style.fill: "#1a1a2e"
+  style.stroke: "#2a2a3d"
+  style.font-color: "#a0a0cf"
+}

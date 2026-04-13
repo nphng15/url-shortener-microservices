@@ -1,0 +1,109 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+shape: sequence_diagram
+Client
+Gateway
+UserService
+URLService
+Redis
+RabbitMQ
+AnalyticsService
+NotificationService
+
+step1: "Step 1 — Register (no auth)" {
+  Client -> Gateway: "POST /api/auth/register\nX-Correlation-ID: corr-001\n{email, password}"
+  Gateway -> UserService: "POST /register\nX-Correlation-ID: corr-001\n[no JWT check, public route]"
+  UserService -> Gateway: "201 {user_id, email}"
+  Gateway -> Client: "201 {user_id, email}\nX-Correlation-ID: corr-001"
+}
+
+step2: "Step 2 — Login → JWT Issued" {
+  Client -> Gateway: "POST /api/auth/login\nX-Correlation-ID: corr-002\n{email, password}"
+  Gateway -> UserService: "POST /login\nX-Correlation-ID: corr-002"
+  UserService -> Gateway: "200 {token, expires_at}\n[HS256 signed, sub=user_id, email]"
+  Gateway -> Client: "200 {token, expires_at}\nX-Correlation-ID: corr-002"
+}
+
+step3: "Step 3 — Shorten URL (JWT + Rate Limit + Circuit Breaker)" {
+  Client -> Gateway: "POST /api/shorten\nAuthorization: Bearer <token>\nX-Correlation-ID: corr-003\n{url}"
+  Gateway -> Gateway: "JWTMiddleware: VerifyToken(HS256)\nclaims → {sub, email} injected into ctx"
+  Gateway -> Redis: "INCR rl:shorten:<ip>\n→ count=1\nEXPIRE 60s"
+  Redis -> Gateway: "count=1 ≤ 10 → allowed"
+  Gateway -> URLService: "POST /shorten\nX-Correlation-ID: corr-003\nAuthorization: Bearer <token>\n[CircuitBreaker: CLOSED]"
+  URLService -> URLService: "BEGIN TX\nINSERT urls (short_code, original_url, user_id)\nINSERT outbox (url.created, payload)\nCOMMIT"
+  URLService -> Gateway: "201 {short_code, short_url, original_url}"
+  Gateway -> Gateway: "CircuitBreaker: success → failures=0"
+  Gateway -> Client: "201 {short_code, short_url}\nX-Correlation-ID: corr-003"
+}
+
+step4: "Step 4 — Outbox Worker Publishes URLCreatedEvent" {
+  URLService -> URLService: "OutboxCoordinator polls every 2s\nFetchUnpublished(limit=50) → [outbox row]\nWorker picks up row"
+  URLService -> RabbitMQ: "exchange: url-shortener\nrouting_key: url.created\nbody: URLCreatedEvent{EventID, CorrelationID:corr-003,\nShortCode, OriginalURL, UserID, UserEmail}\nDeliveryMode: Persistent"
+  URLService -> URLService: "MarkPublished(outbox.id)\npublished_at = now()"
+}
+
+step5: "Step 5 — NotificationService Consumes URLCreatedEvent" {
+  RabbitMQ -> NotificationService: "queue: notifications.events\nrouting_key: url.created\nprefetch=1 → one message at a time"
+  NotificationService -> NotificationService: "BEGIN TX\ndecode URLCreatedEvent\nuser_id=evt.UserID, email=evt.UserEmail\nINSERT notifications (pending)\nmockEmail log → UPDATE status='sent', sent_at=now()\nCOMMIT"
+  NotificationService -> NotificationService: "log: would send email to user\n{user_id, user_email, message, correlation_id:corr-003}"
+  NotificationService -> RabbitMQ: "d.Ack(false)"
+}
+
+step6: "Step 6 — Redirect via Gateway (Circuit Breaker + Redis Cache Hit)" {
+  Client -> Gateway: "GET /r/abc1234\nX-Correlation-ID: corr-004\n[no auth, rate limit: redirect 300/min]"
+  Gateway -> Redis: "INCR rl:redirect:<ip> → count=1\nEXPIRE 60s"
+  Redis -> Gateway: "count=1 ≤ 300 → allowed"
+  Gateway -> URLService: "GET /abc1234\nX-Correlation-ID: corr-004\n[CircuitBreaker.Do → CLOSED, execute]"
+  URLService -> Redis: "GET url:abc1234\n[50ms timeout ctx]"
+  Redis -> URLService: "HIT: {original_url, is_active:true, expires_at:null}"
+  URLService -> Gateway: "301 Location: https://example.com/very/long/path"
+  Gateway -> Gateway: "CircuitBreaker: status=301 < 500 → success, failures=0"
+  Gateway -> Client: "301 Location: https://example.com/very/long/path\nX-Correlation-ID: corr-004"
+}
+
+step6b: "Step 6b — URLService Writes Click Outbox (non-fatal, separate TX)" {
+  URLService -> URLService: "BEGIN TX\nINSERT outbox(url.clicked,\nURLClickedEvent{IPHash, UserAgent,\nCorrelationID:corr-004})\nCOMMIT\n[failure here does NOT affect 301 response]"
+}
+
+step7: "Step 7 — Outbox Worker Publishes URLClickedEvent" {
+  URLService -> URLService: "OutboxCoordinator next poll cycle (≤2s)\nFetchUnpublished → [url.clicked row]"
+  URLService -> RabbitMQ: "exchange: url-shortener\nrouting_key: url.clicked\nbody: URLClickedEvent{EventID, CorrelationID:corr-004,\nShortCode, IPHash, UserAgent, ClickedAt}"
+  URLService -> URLService: "MarkPublished(outbox.id)"
+}
+
+step8: "Step 8 — AnalyticsService Consumes URLClickedEvent" {
+  RabbitMQ -> AnalyticsService: "queue: analytics.clicks\nrouting_key: url.clicked\nprefetch=1"
+  AnalyticsService -> AnalyticsService: "BEGIN TX\ndedupStore.Exists(tx, event_id) → false\ndedupStore.Insert(tx, event_id)\nclickStore.Insert(tx, ClickRecord{ShortCode, IPHash, ClickedAt})\nMilestoneChecker.CheckAndPublish(tx, code)\n  COUNT(*) FROM clicks WHERE short_code = 'abc1234' → 1\n  1 < 10 → no milestone\nCOMMIT"
+  AnalyticsService -> RabbitMQ: "d.Ack(false)"
+  AnalyticsService -> AnalyticsService: "log: click processed\n{event_id, short_code, duration_ms, correlation_id:corr-004}"
+}
+
+step9: "Step 9 — Fetch Stats (Public Endpoint)" {
+  Client -> Gateway: "GET /api/stats/abc1234\nX-Correlation-ID: corr-005\n[no auth required]"
+  Gateway -> AnalyticsService: "GET /stats/abc1234\nX-Correlation-ID: corr-005\n[direct proxy, no circuit breaker]"
+  AnalyticsService -> AnalyticsService: "errgroup: 4 concurrent queries\nCountByCode('abc1234') → 1\nCountByCodeSince(now-24h) → 1\nCountByCodeSince(now-7d) → 1\nTopReferers(5) → []\n[all use idx_clicks_short_code_time]"
+  AnalyticsService -> Gateway: "200 {short_code, total_clicks:1,\nclicks_last_24h:1, clicks_last_7d:1,\ntop_referers:[]}"
+  Gateway -> Client: "200 {stats payload}\nX-Correlation-ID: corr-005"
+}
+
+step10: "Step 10 — Fetch Notifications (JWT Required)" {
+  Client -> Gateway: "GET /api/notifications\nAuthorization: Bearer <token>\nX-Correlation-ID: corr-006"
+  Gateway -> Gateway: "JWTMiddleware: VerifyToken → claims{sub=user_id}\n[no rate limit on this route]"
+  Gateway -> NotificationService: "GET /notifications\nAuthorization: Bearer <token>\nX-Correlation-ID: corr-006"
+  NotificationService -> NotificationService: "JWTMiddleware → claims{sub=user_id}\nFindByUserID(user_id, afterID='', limit=20)\nSELECT ... FROM notifications\nWHERE user_id=\$1 ORDER BY created_at DESC LIMIT 21\n[idx_notifications_user_created]"
+  NotificationService -> Gateway: "200 {notifications:[{id, event_type:'url.created',\npayload:{...}, status:'sent', sent_at}],\nnext_cursor:null}"
+  Gateway -> Client: "200 {notifications:[...]}\nX-Correlation-ID: corr-006"
+}
+
+corrthread: "X-Correlation-ID Threading Summary" {
+  Client."corr-001..006 set by client or generated by Gateway CorrelationIDMiddleware"
+  Gateway."echoed as X-Correlation-ID response header on every response"
+  URLService."injected into context via CorrelationIDMiddleware; stored in outbox event payloads"
+  RabbitMQ."carried in BaseEvent.CorrelationID field across async boundary"
+  AnalyticsService."logged per message: {correlation_id, event_id, short_code}"
+  NotificationService."logged per message: {correlation_id, notification_id, event_type}"
+}

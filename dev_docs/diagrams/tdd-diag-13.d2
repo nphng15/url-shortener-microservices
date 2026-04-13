@@ -1,0 +1,200 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+
+direction: right
+
+# ── urls table ─────────────────────────────────────────────────────────────────
+urls_table: "urls" {
+  shape: sql_table
+  id: "UUID NOT NULL DEFAULT gen_random_uuid()" {constraint: primary_key}
+  short_code: "VARCHAR(10) NOT NULL" {constraint: unique}
+  original_url: "TEXT NOT NULL"
+  user_id: "UUID NOT NULL"
+  created_at: "TIMESTAMPTZ NOT NULL DEFAULT now()"
+  expires_at: "TIMESTAMPTZ NULL"
+  is_active: "BOOLEAN NOT NULL DEFAULT true"
+  style.fill: "#7C3AED"
+  style.font-color: white
+}
+
+# ── urls indexes ───────────────────────────────────────────────────────────────
+idx_sc: "idx_urls_short_code" {
+  shape: rectangle
+  label: |md
+    **idx_urls_short_code**
+    `CREATE UNIQUE INDEX`
+    `ON urls(short_code)`
+    ─────────────────────
+    Type: B-tree UNIQUE
+    Purpose: redirect lookup
+    O(log n) per GET /:code
+  |
+  style.fill: "#DDD6FE"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+  style.border-radius: 6
+}
+
+idx_user: "idx_urls_user_id_created" {
+  shape: rectangle
+  label: |md
+    **idx_urls_user_id_created**
+    `CREATE INDEX`
+    `ON urls(user_id, created_at DESC)`
+    ─────────────────────────────────
+    Type: B-tree composite
+    Purpose: paginated user URL list
+    Supports WHERE user_id = $1
+    ORDER BY created_at DESC cursor
+  |
+  style.fill: "#DDD6FE"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 2
+  style.border-radius: 6
+}
+
+urls_table.short_code -> idx_sc: "leading col"
+urls_table.user_id -> idx_user: "leading col"
+urls_table.created_at -> idx_user: "trailing col"
+
+# ── outbox table ───────────────────────────────────────────────────────────────
+outbox_table: "outbox" {
+  shape: sql_table
+  id: "UUID NOT NULL DEFAULT gen_random_uuid()" {constraint: primary_key}
+  event_type: "TEXT NOT NULL"
+  payload: "JSONB NOT NULL"
+  created_at: "TIMESTAMPTZ NOT NULL DEFAULT now()"
+  published_at: "TIMESTAMPTZ NULL"
+  style.fill: "#1D4ED8"
+  style.font-color: white
+}
+
+# ── outbox indexes ─────────────────────────────────────────────────────────────
+idx_outbox: "idx_outbox_unpublished" {
+  shape: rectangle
+  label: |md
+    **idx_outbox_unpublished**
+    `CREATE INDEX`
+    `ON outbox(created_at ASC)`
+    `WHERE published_at IS NULL`
+    ────────────────────────────
+    Type: B-tree PARTIAL
+    Purpose: outbox coordinator poll
+    Filters only unpublished rows
+    Stays small as rows are marked
+    FOR UPDATE SKIP LOCKED safe
+  |
+  style.fill: "#BFDBFE"
+  style.stroke: "#1D4ED8"
+  style.stroke-width: 2
+  style.border-radius: 6
+}
+
+outbox_table.published_at -> idx_outbox: "partial filter\nIS NULL"
+outbox_table.created_at -> idx_outbox: "sort col ASC"
+
+# ── Go struct annotations ──────────────────────────────────────────────────────
+url_struct: "URLRecord (Go struct)" {
+  shape: rectangle
+  label: |go
+    type URLRecord struct {
+        ID          string     // id UUID
+        ShortCode   string     // short_code VARCHAR(10)
+        OriginalURL string     // original_url TEXT
+        UserID      string     // user_id UUID
+        CreatedAt   time.Time  // created_at TIMESTAMPTZ
+        ExpiresAt   *time.Time // expires_at TIMESTAMPTZ NULL
+        IsActive    bool       // is_active BOOLEAN
+    }
+  |
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+  style.border-radius: 6
+  style.font: mono
+}
+
+outbox_struct: "OutboxRecord (Go struct)" {
+  shape: rectangle
+  label: |go
+    type OutboxRecord struct {
+        ID          string     // id UUID
+        EventType   string     // event_type TEXT (routing key)
+        Payload     []byte     // payload JSONB (raw JSON)
+        CreatedAt   time.Time  // created_at TIMESTAMPTZ
+        PublishedAt *time.Time // published_at TIMESTAMPTZ NULL
+    }
+  |
+  style.fill: "#F0FDF4"
+  style.stroke: "#16A34A"
+  style.stroke-width: 2
+  style.border-radius: 6
+  style.font: mono
+}
+
+url_struct -> urls_table: "maps to" {
+  style.stroke-dash: 4
+  style.stroke: "#16A34A"
+}
+outbox_struct -> outbox_table: "maps to" {
+  style.stroke-dash: 4
+  style.stroke: "#16A34A"
+}
+
+# ── transaction boundary annotation ───────────────────────────────────────────
+tx_note: "Single Transaction Boundary" {
+  shape: rectangle
+  label: |md
+    **POST /shorten: one tx, two tables**
+    
+    BEGIN
+      INSERT INTO urls (...)       ← URLRecord
+        RETURNING id, ...
+      INSERT INTO outbox (...)     ← URLCreatedEvent JSON
+        event_type = "url.created"
+        payload    = JSONB bytes
+    COMMIT
+    
+    *Atomicity guarantee: either both*
+    *rows commit or neither does.*
+    *No partial write ever occurs.*
+  |
+  style.fill: "#FEF9C3"
+  style.stroke: "#CA8A04"
+  style.stroke-width: 2
+  style.border-radius: 6
+}
+
+urls_table -> tx_note: "written together" {
+  style.stroke: "#CA8A04"
+  style.stroke-width: 2
+}
+outbox_table -> tx_note: "written together" {
+  style.stroke: "#CA8A04"
+  style.stroke-width: 2
+}
+
+# ── field semantics annotations ────────────────────────────────────────────────
+field_notes: "Column Semantics" {
+  shape: rectangle
+  # Using advanced block string syntax |' to avoid conflict with Markdown table pipes
+  label: |'md
+    | Column | Semantics |
+    |--------|-----------|
+    | `short_code` | 7-char base62, crypto/rand; UNIQUE enforces no collision |
+    | `original_url` | TEXT, unbounded; no artificial VARCHAR limit |
+    | `user_id` | UUID v4, not FK to user_db (no cross-DB join) |
+    | `expires_at` | NULL = perpetual; compared with now() on redirect |
+    | `is_active` | false = soft-delete (410 Gone, never 404) |
+    | `event_type` | RabbitMQ routing key literal; must match events.EventType* |
+    | `payload` | Full event JSON; worker reads, publishes raw bytes as AMQP body |
+    | `published_at` | NULL = unpublished; SET by worker after Publish() succeeds |
+  '|
+  style.fill: "#F8FAFC"
+  style.stroke: "#94A3B8"
+  style.border-radius: 6
+}

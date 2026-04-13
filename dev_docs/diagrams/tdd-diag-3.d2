@@ -1,0 +1,314 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+
+direction: right
+
+title: |md
+  ## Domain Event Struct Data Model — shared/events/events.go
+| {near: top-center}
+
+# ── Base Event (embedded in all four) ─────────────────────────────────────────
+BaseEvent: {
+  shape: class
+  style.fill: "#7C3AED"
+  style.font-color: white
+  style.stroke: "#5B21B6"
+  label: "BaseEvent (embedded)\nsizeof=64 bytes"
+  
+  EventType: "string `json:\"event_type\"`"
+  EventID: "string `json:\"event_id\"`"
+  CorrelationID: "string `json:\"correlation_id\"`"
+  OccurredAt: "time.Time `json:\"occurred_at\"`"
+}
+
+base_note: |md
+  ### Metadata Invariants
+  **Routing key** = EventType literal  
+  **EventID** = UUID v4 → idempotency key  
+  **CorrelationID** → propagated across async boundary  
+  **OccurredAt** → UTC wall clock at creation  
+| {
+  style.fill: "#EDE9FE"
+  style.stroke: "#7C3AED"
+}
+
+# Fix: Connect note instead of using 'near' which is unsupported for objects in ELK
+base_note -- BaseEvent: {
+  style.stroke-dash: 5
+}
+
+# ── URLCreatedEvent ────────────────────────────────────────────────────────────
+URLCreatedEvent: {
+  shape: class
+  style.fill: "#1D4ED8"
+  style.font-color: white
+  style.stroke: "#1E3A8A"
+  label: "URLCreatedEvent"
+  
+  "BaseEvent": "(embedded)"
+  ShortCode: "string `json:\"short_code\"`"
+  OriginalURL: "string `json:\"original_url\"`"
+  UserID: "string `json:\"user_id\"`  // UUID v4"
+  UserEmail: "string `json:\"user_email\"`"
+  ExpiresAt: "*time.Time `json:\"expires_at,omitempty\"`"
+}
+
+created_routing: "routing_key: \"url.created\"" {
+  style.fill: "#DBEAFE"
+  style.stroke: "#1D4ED8"
+  style.font-size: 13
+}
+
+created_prod: "Producer" {
+  shape: rectangle
+  style.fill: "#1D4ED8"
+  style.font-color: white
+  style.border-radius: 4
+  label: "url-service\n(POST /shorten tx)"
+}
+
+created_cons_notif: "Consumer A" {
+  shape: rectangle
+  style.fill: "#059669"
+  style.font-color: white
+  style.border-radius: 4
+  label: "notification-service\n(notifications.events)"
+}
+
+# ── URLClickedEvent ────────────────────────────────────────────────────────────
+URLClickedEvent: {
+  shape: class
+  style.fill: "#0F766E"
+  style.font-color: white
+  style.stroke: "#134E4A"
+  label: "URLClickedEvent"
+  
+  "BaseEvent": "(embedded)"
+  ShortCode: "string `json:\"short_code\"`"
+  IPHash: "string `json:\"ip_hash\"`    // SHA-256(IP+salt)"
+  UserAgent: "string `json:\"user_agent\"`"
+  Referer: "string `json:\"referer,omitempty\"`"
+  ClickedAt: "time.Time `json:\"clicked_at\"` // mirrors OccurredAt"
+}
+
+clicked_routing: "routing_key: \"url.clicked\"" {
+  style.fill: "#CCFBF1"
+  style.stroke: "#0F766E"
+  style.font-size: 13
+}
+
+clicked_prod: "Producer" {
+  shape: rectangle
+  style.fill: "#0F766E"
+  style.font-color: white
+  style.border-radius: 4
+  label: "url-service\n(GET /:code outbox)"
+}
+
+clicked_cons_analytics: "Consumer B" {
+  shape: rectangle
+  style.fill: "#059669"
+  style.font-color: white
+  style.border-radius: 4
+  label: "analytics-service\n(analytics.clicks)"
+}
+
+# ── URLDeletedEvent ────────────────────────────────────────────────────────────
+URLDeletedEvent: {
+  shape: class
+  style.fill: "#B45309"
+  style.font-color: white
+  style.stroke: "#78350F"
+  label: "URLDeletedEvent"
+  
+  "BaseEvent": "(embedded)"
+  ShortCode: "string `json:\"short_code\"`"
+  UserID: "string `json:\"user_id\"`"
+  UserEmail: "string `json:\"user_email\"` // denormalized"
+}
+
+deleted_routing: "routing_key: \"url.deleted\"" {
+  style.fill: "#FEF3C7"
+  style.stroke: "#B45309"
+  style.font-size: 13
+}
+
+deleted_prod: "Producer" {
+  shape: rectangle
+  style.fill: "#B45309"
+  style.font-color: white
+  style.border-radius: 4
+  label: "url-service\n(DELETE /urls/:code tx)"
+}
+
+deleted_cons_notif: "Consumer C" {
+  shape: rectangle
+  style.fill: "#059669"
+  style.font-color: white
+  style.border-radius: 4
+  label: "notification-service\n(notifications.events)"
+}
+
+# ── MilestoneReachedEvent ──────────────────────────────────────────────────────
+MilestoneReachedEvent: {
+  shape: class
+  style.fill: "#BE185D"
+  style.font-color: white
+  style.stroke: "#831843"
+  label: "MilestoneReachedEvent"
+  
+  "BaseEvent": "(embedded)"
+  ShortCode: "string `json:\"short_code\"`"
+  UserID: "string `json:\"user_id\"`"
+  UserEmail: "string `json:\"user_email\"`"
+  MilestoneN: "int    `json:\"milestone\"`  // 10 | 100 | 1000"
+  TotalClicks: "int64  `json:\"total_clicks\"`"
+}
+
+milestone_routing: "routing_key: \"milestone.reached\"" {
+  style.fill: "#FCE7F3"
+  style.stroke: "#BE185D"
+  style.font-size: 13
+}
+
+milestone_prod: "Producer" {
+  shape: rectangle
+  style.fill: "#BE185D"
+  style.font-color: white
+  style.border-radius: 4
+  label: "analytics-service\n(MilestoneChecker)"
+}
+
+milestone_cons_notif: "Consumer D" {
+  shape: rectangle
+  style.fill: "#059669"
+  style.font-color: white
+  style.border-radius: 4
+  label: "notification-service\n(notifications.events)"
+}
+
+# ── Constant block ─────────────────────────────────────────────────────────────
+constants: "EventType Constants" {
+  shape: class
+  style.fill: "#374151"
+  style.font-color: white
+  style.stroke: "#111827"
+  label: "EventType Constants (routing keys)"
+  
+  EventTypeURLCreated: "= \"url.created\""
+  EventTypeURLClicked: "= \"url.clicked\""
+  EventTypeURLDeleted: "= \"url.deleted\""
+  EventTypeMilestoneReached: "= \"milestone.reached\""
+}
+
+# ── Inheritance arrows (BaseEvent embedded) ────────────────────────────────────
+BaseEvent -> URLCreatedEvent: "embedded" {
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  style.stroke-dash: 4
+  style.stroke: "#7C3AED"
+}
+BaseEvent -> URLClickedEvent: "embedded" {
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  style.stroke-dash: 4
+  style.stroke: "#7C3AED"
+}
+BaseEvent -> URLDeletedEvent: "embedded" {
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  style.stroke-dash: 4
+  style.stroke: "#7C3AED"
+}
+BaseEvent -> MilestoneReachedEvent: "embedded" {
+  target-arrowhead.shape: triangle
+  target-arrowhead.style.filled: false
+  style.stroke-dash: 4
+  style.stroke: "#7C3AED"
+}
+
+# ── Routing key labels ─────────────────────────────────────────────────────────
+URLCreatedEvent -> created_routing: "" {
+  style.stroke-dash: 2
+  style.stroke: "#1D4ED8"
+}
+URLClickedEvent -> clicked_routing: "" {
+  style.stroke-dash: 2
+  style.stroke: "#0F766E"
+}
+URLDeletedEvent -> deleted_routing: "" {
+  style.stroke-dash: 2
+  style.stroke: "#B45309"
+}
+MilestoneReachedEvent -> milestone_routing: "" {
+  style.stroke-dash: 2
+  style.stroke: "#BE185D"
+}
+
+# ── Producer arrows ────────────────────────────────────────────────────────────
+created_prod -> URLCreatedEvent: "publishes" {
+  style.stroke: "#1D4ED8"
+  style.animated: true
+}
+clicked_prod -> URLClickedEvent: "publishes" {
+  style.stroke: "#0F766E"
+  style.animated: true
+}
+deleted_prod -> URLDeletedEvent: "publishes" {
+  style.stroke: "#B45309"
+  style.animated: true
+}
+milestone_prod -> MilestoneReachedEvent: "publishes" {
+  style.stroke: "#BE185D"
+  style.animated: true
+}
+
+# ── Consumer arrows (dashed = references) ────────────────────────────────────
+URLCreatedEvent -> created_cons_notif: "consumes" {
+  style.stroke: "#059669"
+  style.stroke-dash: 5
+}
+URLClickedEvent -> clicked_cons_analytics: "consumes" {
+  style.stroke: "#059669"
+  style.stroke-dash: 5
+}
+URLDeletedEvent -> deleted_cons_notif: "consumes" {
+  style.stroke: "#059669"
+  style.stroke-dash: 5
+}
+MilestoneReachedEvent -> milestone_cons_notif: "consumes" {
+  style.stroke: "#059669"
+  style.stroke-dash: 5
+}
+
+# ── Constants reference ────────────────────────────────────────────────────────
+constants -> BaseEvent: "EventType value" {
+  style.stroke: "#6B7280"
+  style.stroke-dash: 3
+  target-arrowhead.shape: diamond
+}
+
+# ── Legend ─────────────────────────────────────────────────────────────────────
+legend: {
+  near: bottom-left
+  style.fill: "#F9FAFB"
+  style.stroke: "#D1D5DB"
+  label: "Legend"
+  
+  embed_arrow: "◁╌╌  embedded (composition)" {
+    shape: text
+    style.font-size: 12
+  }
+  prod_arrow: "──►  publishes (outbox delivery)" {
+    shape: text
+    style.font-size: 12
+  }
+  cons_arrow: "╌╌►  consumes (AMQP binding)" {
+    shape: text
+    style.font-size: 12
+  }
+}

@@ -1,0 +1,153 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+shape: sequence_diagram
+
+consumer: "ClickConsumer\ngoroutine"
+broker: "RabbitMQ\nanalytics.clicks"
+db: "PostgreSQL\nanalytics_db"
+mq_out: "RabbitMQ\nurl-shortener\nexchange"
+
+broker -> consumer: 'amqp.Delivery{Body, RoutingKey}' {
+  style.stroke: "#4A90D9"
+}
+
+decode: {
+  consumer -> consumer: "json.Unmarshal(d.Body, &URLClickedEvent)" {
+    style.stroke: "#4A90D9"
+  }
+}
+
+validate: {
+  consumer -> consumer: 'validate: EventID != "" && ShortCode != ""' {
+    style.stroke: "#4A90D9"
+  }
+}
+
+tx_begin: {
+  consumer -> db: "pool.Begin(ctx) -> tx" {
+    style.stroke: "#4A90D9"
+    style.stroke-width: 2
+  }
+}
+
+dedup_insert: {
+  consumer -> db: "INSERT INTO processed_events(event_id)\nON CONFLICT (event_id) DO NOTHING\nRETURNING id" {
+    style.stroke: "#4A90D9"
+    style.bold: true
+  }
+}
+
+dedup_check: {
+  db -> consumer: "rowsAffected = 0 OR 1" {
+    style.stroke: "#4A90D9"
+    style.stroke-dash: 5
+  }
+}
+
+duplicate_path: "DUPLICATE PATH\n(event_id already seen)" {
+  consumer -> consumer: "rowsAffected == 0\n-> tx.Rollback(ctx)" {
+    style.stroke: "#E53935"
+    style.bold: true
+  }
+  consumer -> broker: "d.Ack(false) <- remove from queue, no requeue" {
+    style.stroke: "#E53935"
+    style.bold: true
+  }
+  consumer -> consumer: 'log.Info("duplicate event skipped", "event_id", evt.EventID)' {
+    style.stroke: "#E53935"
+    style.stroke-dash: 3
+  }
+}
+
+new_path: "NEW PATH\n(first time seeing event_id)" {
+  consumer -> consumer: "rowsAffected == 1 -> continue" {
+    style.stroke: "#43A047"
+    style.bold: true
+  }
+  consumer -> db: 'INSERT INTO clicks\n(short_code, clicked_at, ip_hash, user_agent, referer)\nVALUES ($1,$2,$3,$4,$5)' {
+    style.stroke: "#43A047"
+    style.stroke-width: 2
+    style.bold: true
+  }
+  db -> consumer: "click row inserted" {
+    style.stroke: "#43A047"
+    style.stroke-dash: 5
+  }
+  consumer -> db: 'SELECT COUNT(*) FROM clicks\nWHERE short_code = $1\n[on same tx - includes current insert]' {
+    style.stroke: "#43A047"
+  }
+  db -> consumer: "totalClicks int64" {
+    style.stroke: "#43A047"
+    style.stroke-dash: 5
+  }
+  
+  milestone_loop: "for threshold in [10, 100, 1000]" {
+    consumer -> consumer: "if totalClicks < threshold -> skip" {
+      style.stroke: "#FB8C00"
+      style.stroke-dash: 3
+    }
+    consumer -> db: 'SELECT EXISTS(\n  SELECT 1 FROM milestones\n  WHERE short_code=$1 AND milestone=$2\n)' {
+      style.stroke: "#FB8C00"
+    }
+    db -> consumer: "alreadyRecorded bool" {
+      style.stroke: "#FB8C00"
+      style.stroke-dash: 5
+    }
+    consumer -> db: "INSERT INTO milestones(short_code, milestone)\nON CONFLICT (short_code, milestone) DO NOTHING\n[only if !alreadyRecorded]" {
+      style.stroke: "#FB8C00"
+      style.bold: true
+    }
+  }
+
+  consumer -> db: "tx.Commit(ctx)" {
+    style.stroke: "#43A047"
+    style.stroke-width: 2
+    style.bold: true
+  }
+  db -> consumer: "commit OK" {
+    style.stroke: "#43A047"
+    style.stroke-dash: 5
+  }
+
+  publish_milestone: {
+    consumer -> mq_out: 'PublishMilestone(MilestoneReachedEvent)\nrouting_key="milestone.reached"\n[OUTSIDE tx - best-effort]' {
+      style.stroke: "#FB8C00"
+      style.stroke-dash: 5
+      style.bold: true
+    }
+    mq_out -> consumer: "publish OK (or error -> log Warn + continue)" {
+      style.stroke: "#FB8C00"
+      style.stroke-dash: 5
+    }
+  }
+
+  consumer -> broker: "d.Ack(false) <- remove from queue" {
+    style.stroke: "#43A047"
+    style.bold: true
+    style.stroke-width: 2
+  }
+  consumer -> consumer: 'log.Info("click processed", "event_id", evt.EventID, "short_code", evt.ShortCode)' {
+    style.stroke: "#43A047"
+    style.stroke-dash: 3
+  }
+}
+
+guarantee_note: {
+  shape: text
+  near: bottom-center
+  label: |'md
+    **At-Least-Once + Idempotency Guarantee**
+
+    | Scenario | Outcome |
+    |---|---|
+    | Message delivered once | INSERT processed_events -> rowsAffected=1 -> click counted |
+    | Message redelivered (same event_id) | INSERT -> conflict -> rowsAffected=0 -> ROLLBACK -> Ack -> no-op |
+    | tx.Commit fails after INSERT clicks | d.Nack(requeue=true) -> redelivered -> dedup fires -> no double-count |
+    | Milestone publish fails after COMMIT | Milestone row durable; event may be missing; notification deduplicates replays |
+    | Prefetch = 1 | Broker holds next message until d.Ack or d.Nack - serial processing |
+  '|
+}

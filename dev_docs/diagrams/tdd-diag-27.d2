@@ -1,0 +1,350 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 4
+  }
+}
+direction: right
+
+title: {
+  label: |'md
+    ## Stats API Query Data Flow
+    `GET /stats/:code` · `GET /stats/:code/timeline?interval=day`
+  '|
+  near: top-center
+}
+
+client: "HTTP Client" {
+  shape: rectangle
+  style.fill: "#E8E8E8"
+  style.stroke: "#555555"
+  style.bold: true
+}
+
+gateway: "API Gateway\n:8080" {
+  shape: rectangle
+  style.fill: "#DEE1EB"
+  style.stroke: "#888888"
+}
+
+analytics_svc: "analytics-service\n:8082" {
+  shape: rectangle
+  style.fill: "#DEE1EB"
+  style.stroke: "#888888"
+  style.bold: true
+  handler: "StatsHandler" {
+    shape: rectangle
+    style.fill: "#C7F1FF"
+    style.stroke: "#2288AA"
+    stats_ep: "GET /stats/{code}" {
+      shape: rectangle
+      style.fill: "#C7F1FF"
+      style.stroke: "#2288AA"
+    }
+    timeline_ep: "GET /stats/{code}/timeline" {
+      shape: rectangle
+      style.fill: "#C7F1FF"
+      style.stroke: "#2288AA"
+    }
+  }
+  errgroup: "errgroup.WithContext\n(4 goroutines parallel)" {
+    shape: rectangle
+    style.fill: "#E4DBFE"
+    style.stroke: "#7755CC"
+    style.font: mono
+  }
+  clickrepo: "ClickRepository\npgxClickStore" {
+    shape: rectangle
+    style.fill: "#B5AFF6"
+    style.stroke: "#5533AA"
+    style.bold: true
+    q_total: "CountByCode(code)" {
+      shape: rectangle
+      style.fill: "#E4DBFE"
+      style.stroke: "#7755CC"
+      style.font: mono
+    }
+    q_24h: "CountByCodeSince(code, now-24h)" {
+      shape: rectangle
+      style.fill: "#E4DBFE"
+      style.stroke: "#7755CC"
+      style.font: mono
+    }
+    q_7d: "CountByCodeSince(code, now-7d)" {
+      shape: rectangle
+      style.fill: "#E4DBFE"
+      style.stroke: "#7755CC"
+      style.font: mono
+    }
+    q_refs: "TopReferers(code, 5)" {
+      shape: rectangle
+      style.fill: "#E4DBFE"
+      style.stroke: "#7755CC"
+      style.font: mono
+    }
+    q_timeline: "TimelineBuckets(code, 'day')" {
+      shape: rectangle
+      style.fill: "#E4DBFE"
+      style.stroke: "#7755CC"
+      style.font: mono
+    }
+  }
+  assembler: "Assemble Response" {
+    shape: rectangle
+    style.fill: "#C7F1FF"
+    style.stroke: "#2288AA"
+  }
+}
+
+analytics_db: "analytics_db\nPostgreSQL :5433" {
+  shape: cylinder
+  style.fill: "#ACE1AF"
+  style.stroke: "#336633"
+  style.bold: true
+}
+
+idx1: "idx_clicks_short_code_time\nON clicks(short_code, clicked_at DESC)" {
+  shape: rectangle
+  style.fill: "#FFF9C9"
+  style.stroke: "#AA8800"
+  style.font: mono
+}
+
+idx2: "idx_clicks_referer\nON clicks(short_code, referer)\nWHERE referer IS NOT NULL" {
+  shape: rectangle
+  style.fill: "#FFE7CB"
+  style.stroke: "#CC7700"
+  style.font: mono
+}
+
+sql_total: {
+  label: |'md
+    sql
+    SELECT COUNT(*)
+    FROM clicks
+    WHERE short_code = $1
+  '|
+  shape: rectangle
+  style.fill: "#F0F8FF"
+  style.stroke: "#6699CC"
+  style.font: mono
+}
+
+sql_since: {
+  label: |'md
+    sql
+    SELECT COUNT(*)
+    FROM clicks
+    WHERE short_code = $1
+      AND clicked_at >= $2
+  '|
+  shape: rectangle
+  style.fill: "#F0F8FF"
+  style.stroke: "#6699CC"
+  style.font: mono
+}
+
+sql_refs: {
+  label: |'md
+    sql
+    SELECT referer, COUNT(*) AS cnt
+    FROM clicks
+    WHERE short_code = $1
+      AND referer IS NOT NULL
+    GROUP BY referer
+    ORDER BY cnt DESC
+    LIMIT 5
+  '|
+  shape: rectangle
+  style.fill: "#F0F8FF"
+  style.stroke: "#6699CC"
+  style.font: mono
+}
+
+sql_timeline: {
+  label: |'md
+    sql
+    SELECT
+      date_trunc('day',
+        clicked_at AT TIME ZONE 'UTC')
+        AS period,
+      COUNT(*) AS clicks
+    FROM clicks
+    WHERE short_code = $1
+    GROUP BY period
+    ORDER BY period ASC
+  '|
+  shape: rectangle
+  style.fill: "#F0F8FF"
+  style.stroke: "#6699CC"
+  style.font: mono
+}
+
+resp_stats: "statsResponse\n{short_code, total_clicks,\nclicks_last_24h, clicks_last_7d,\ntop_referers[]}" {
+  shape: rectangle
+  style.fill: "#88DCF7"
+  style.stroke: "#1177AA"
+  style.font: mono
+}
+
+resp_timeline: "timelineResponse\n{short_code, interval,\npoints:[{period, clicks}]}" {
+  shape: rectangle
+  style.fill: "#88DCF7"
+  style.stroke: "#1177AA"
+  style.font: mono
+}
+
+# ── Request routing ──────────────────────────────────────────────────────────
+client -> gateway: "GET /api/stats/{code}\nGET /api/stats/{code}/timeline?interval=day" {
+  style.stroke: "#333333"
+  style.bold: true
+}
+gateway -> analytics_svc.handler.stats_ep: "GET /stats/{code}\n(strip /api prefix)" {
+  style.stroke: "#333333"
+}
+gateway -> analytics_svc.handler.timeline_ep: "GET /stats/{code}/timeline?interval=day\n(strip /api prefix)" {
+  style.stroke: "#333333"
+}
+
+# ── Stats path: errgroup fan-out ─────────────────────────────────────────────
+analytics_svc.handler.stats_ep -> analytics_svc.errgroup: "g, gCtx := errgroup.WithContext(r.Context())" {
+  style.stroke: "#7755CC"
+}
+analytics_svc.errgroup -> analytics_svc.clickrepo.q_total: "go g.Go(CountByCode)" {
+  style.stroke: "#7755CC"
+  style.stroke-dash: 4
+}
+analytics_svc.errgroup -> analytics_svc.clickrepo.q_24h: "go g.Go(CountByCodeSince 24h)" {
+  style.stroke: "#7755CC"
+  style.stroke-dash: 4
+}
+analytics_svc.errgroup -> analytics_svc.clickrepo.q_7d: "go g.Go(CountByCodeSince 7d)" {
+  style.stroke: "#7755CC"
+  style.stroke-dash: 4
+}
+analytics_svc.errgroup -> analytics_svc.clickrepo.q_refs: "go g.Go(TopReferers 5)" {
+  style.stroke: "#7755CC"
+  style.stroke-dash: 4
+}
+
+# ── SQL for stats queries ────────────────────────────────────────────────────
+analytics_svc.clickrepo.q_total -> sql_total {
+  style.stroke: "#6699CC"
+  style.stroke-dash: 2
+}
+analytics_svc.clickrepo.q_24h -> sql_since: "since = now()-24h" {
+  style.stroke: "#6699CC"
+  style.stroke-dash: 2
+}
+analytics_svc.clickrepo.q_7d -> sql_since: "since = now()-7d" {
+  style.stroke: "#6699CC"
+  style.stroke-dash: 2
+}
+analytics_svc.clickrepo.q_refs -> sql_refs {
+  style.stroke: "#6699CC"
+  style.stroke-dash: 2
+}
+
+# ── Index usage annotations ──────────────────────────────────────────────────
+sql_total -> idx1: "Index Scan\nleading col: short_code" {
+  style.stroke: "#AA8800"
+  style.stroke-dash: 3
+}
+sql_since -> idx1: "Index Scan\nshort_code + clicked_at range" {
+  style.stroke: "#AA8800"
+  style.stroke-dash: 3
+}
+sql_refs -> idx2: "Index Scan\npartial idx (referer IS NOT NULL)" {
+  style.stroke: "#CC7700"
+  style.stroke-dash: 3
+}
+
+# ── DB execution ─────────────────────────────────────────────────────────────
+idx1 -> analytics_db: "pgxpool.QueryRow\n(4 concurrent Acquire)" {
+  style.stroke: "#336633"
+  style.bold: true
+}
+idx2 -> analytics_db {
+  style.stroke: "#336633"
+  style.bold: true
+}
+
+# ── Results assemble ─────────────────────────────────────────────────────────
+analytics_db -> analytics_svc.clickrepo.q_total: "int64 total" {
+  style.stroke: "#336633"
+}
+analytics_db -> analytics_svc.clickrepo.q_24h: "int64 last24h" {
+  style.stroke: "#336633"
+}
+analytics_db -> analytics_svc.clickrepo.q_7d: "int64 last7d" {
+  style.stroke: "#336633"
+}
+analytics_db -> analytics_svc.clickrepo.q_refs: "[]RefererCount" {
+  style.stroke: "#336633"
+}
+analytics_svc.clickrepo.q_total -> analytics_svc.errgroup: "return" {
+  style.stroke: "#7755CC"
+  style.stroke-dash: 4
+}
+analytics_svc.clickrepo.q_24h -> analytics_svc.errgroup: "return" {
+  style.stroke: "#7755CC"
+  style.stroke-dash: 4
+}
+analytics_svc.clickrepo.q_7d -> analytics_svc.errgroup: "return" {
+  style.stroke: "#7755CC"
+  style.stroke-dash: 4
+}
+analytics_svc.clickrepo.q_refs -> analytics_svc.errgroup: "return" {
+  style.stroke: "#7755CC"
+  style.stroke-dash: 4
+}
+analytics_svc.errgroup -> analytics_svc.assembler: "g.Wait() — all 4 done\n(or first error → 500)" {
+  style.stroke: "#7755CC"
+  style.bold: true
+}
+analytics_svc.assembler -> resp_stats: "writeJSON(w, 200, statsResponse{...})" {
+  style.stroke: "#1177AA"
+  style.bold: true
+}
+resp_stats -> client: "200 JSON" {
+  style.stroke: "#333333"
+  style.bold: true
+}
+
+# ── Timeline path ────────────────────────────────────────────────────────────
+analytics_svc.handler.timeline_ep -> analytics_svc.clickrepo.q_timeline: "truncUnit = 'day'\n(validated: day|hour only)" {
+  style.stroke: "#7755CC"
+}
+analytics_svc.clickrepo.q_timeline -> sql_timeline {
+  style.stroke: "#6699CC"
+  style.stroke-dash: 2
+}
+sql_timeline -> analytics_db: "pgxpool.Query\n(returns rows)\nMay use idx_clicks_short_code_time\nat high row counts" {
+  style.stroke: "#336633"
+  style.bold: true
+}
+analytics_db -> analytics_svc.clickrepo.q_timeline: "[]TimelinePoint\n{period time.Time, clicks int64}" {
+  style.stroke: "#336633"
+}
+analytics_svc.clickrepo.q_timeline -> resp_timeline: "period.UTC().Format(RFC3339)" {
+  style.stroke: "#1177AA"
+}
+resp_timeline -> client: "200 JSON" {
+  style.stroke: "#333333"
+  style.bold: true
+}
+
+# ── Error path annotation ─────────────────────────────────────────────────────
+err_note: {
+  label: |'md
+    **Error handling**
+    - Any query error → `g.Wait()` returns err → `500`
+    - `interval` ≠ day|hour → `400` (before DB call)
+    - Unknown `short_code` → `200` with zeros (no 404)
+    - `top_referers` nil → coerced to `[]` (never JSON null)
+  '|
+  near: bottom-center
+  shape: rectangle
+  style.fill: "#FFF9C9"
+  style.stroke: "#AA8800"
+}
