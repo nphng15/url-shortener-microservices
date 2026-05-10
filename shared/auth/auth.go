@@ -59,7 +59,7 @@ func (c *Claims) ExpiresAt() time.Time {
 // VerifyToken validates the JWT and returns the claims
 func VerifyToken(tokenString, secret string) (*Claims, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		// PHẢI check token.Method.(*jwt.SigningMethodHMAC) trước khi accept key
+		// Must check token.Method.(*jwt.SigningMethodHMAC) before accepting the key
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
