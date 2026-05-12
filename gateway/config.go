@@ -1,6 +1,9 @@
 package main
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
 
 type Config struct {
 	URLServiceURL          string
@@ -8,20 +11,39 @@ type Config struct {
 	UserServiceURL         string
 	NotificationServiceURL string
 	RedisURL               string
+	JWTSecret              string
 	Port                   string
 	ServiceName            string
 }
 
 func loadConfig() (*Config, error) {
-	return &Config{
-		URLServiceURL:          envOrDefault("URL_SERVICE_URL", "http://url-service:8080"),
-		AnalyticsServiceURL:    envOrDefault("ANALYTICS_SERVICE_URL", "http://analytics-service:8080"),
-		UserServiceURL:         envOrDefault("USER_SERVICE_URL", "http://user-service:8080"),
-		NotificationServiceURL: envOrDefault("NOTIFICATION_SERVICE_URL", "http://notification-service:8080"),
-		RedisURL:               envOrDefault("REDIS_URL", "redis://redis:6379/0"),
+	cfg := &Config{
+		URLServiceURL:          os.Getenv("URL_SERVICE_URL"),
+		AnalyticsServiceURL:    os.Getenv("ANALYTICS_SERVICE_URL"),
+		UserServiceURL:         os.Getenv("USER_SERVICE_URL"),
+		NotificationServiceURL: os.Getenv("NOTIFICATION_SERVICE_URL"),
+		RedisURL:               os.Getenv("REDIS_URL"),
+		JWTSecret:              os.Getenv("JWT_SECRET"),
 		Port:                   envOrDefault("PORT", "8080"),
 		ServiceName:            "gateway",
-	}, nil
+	}
+
+	required := map[string]string{
+		"URL_SERVICE_URL":          cfg.URLServiceURL,
+		"ANALYTICS_SERVICE_URL":    cfg.AnalyticsServiceURL,
+		"USER_SERVICE_URL":         cfg.UserServiceURL,
+		"NOTIFICATION_SERVICE_URL": cfg.NotificationServiceURL,
+		"REDIS_URL":                cfg.RedisURL,
+		"JWT_SECRET":               cfg.JWTSecret,
+	}
+
+	for k, v := range required {
+		if v == "" {
+			return nil, fmt.Errorf("%s is required", k)
+		}
+	}
+
+	return cfg, nil
 }
 
 func envOrDefault(key, fallback string) string {

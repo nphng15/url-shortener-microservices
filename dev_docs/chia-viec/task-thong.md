@@ -1,14 +1,15 @@
 # Thống — Task List (Lead)
 
-> Sở hữu: shared/*, services/user-service/, gateway/, infra, url-service outbox+publisher
+> Sở hữu: shared/_, services/user-service/, gateway/, infra, url-service outbox+publisher
 > KHÔNG sửa code trong: services/url-service/ (trừ outbox.go + publisher.go), services/analytics-service/
-> Owner duy nhất của: docker-compose.yml, go.work, .github/*, shared/*
+> Owner duy nhất của: docker-compose.yml, go.work, .github/_, shared/\*
 
 ---
 
 ## Tuần 1
 
 ### Ngày 1: M1 — shared packages
+
 ```
 [ ] go.work:
     go 1.23
@@ -41,6 +42,7 @@
 ```
 
 ### Ngày 2: M1 — docker-compose + gateway scaffold
+
 ```
 [ ] docker-compose.yml — 11 containers:
     Infra: redis (6379), rabbitmq (5672+15672), url_db (5432), analytics_db (5433), user_db (5434), notification_db (5435)
@@ -67,6 +69,7 @@
 Check M1: `docker compose up --build -d` -> 11 containers healthy < 60s
 
 ### Ngày 3-5: M2 — shared/auth + user-service
+
 ```
 [ ] shared/auth/go.mod + auth.go:
     - type Claims struct { UserID, Email string; jwt.RegisteredClaims }
@@ -96,6 +99,7 @@ Check M1: `docker compose up --build -d` -> 11 containers healthy < 60s
 Check M2: register -> login -> GET /me thành công
 
 ### Ngày 6-7: M3 outbox + bắt đầu gateway
+
 ```
 [ ] url-service/publisher.go (amqpPublisher):
     - Publish(ctx, routingKey, body) error
@@ -127,6 +131,7 @@ Check M2: register -> login -> GET /me thành công
 ## Tuần 2
 
 ### Ngày 8-10: Gateway còn lại
+
 ```
 [ ] gateway/circuitbreaker.go:
     - 3 states: CLOSED, OPEN (503), HALF_OPEN (1 probe)
@@ -151,6 +156,7 @@ Check M2: register -> login -> GET /me thành công
 ```
 
 ### Ngày 11-14: Tests + review
+
 ```
 [ ] gateway/gateway_test.go:
     - CB: CLOSED->OPEN, OPEN->HALF_OPEN, HALF_OPEN->CLOSED, HALF_OPEN->OPEN
@@ -162,6 +168,7 @@ Check M2: register -> login -> GET /me thành công
 ```
 
 Check M5:
+
 - POST /api/shorten -> 201
 - GET /api/urls không token -> 401
 - 11 lần POST /api/shorten -> 429
@@ -173,6 +180,7 @@ Check M5:
 ## Tuần 3
 
 ### Ngày 15-17: E2E
+
 ```
 [ ] scripts/e2e_test.sh:
     1. POST /api/auth/register -> 201
@@ -202,3 +210,10 @@ Check M5:
 - Merge conflicts trên main: bạn resolve
 - PR review: trong 4 tiếng
 - Quyết định cuối khi team 50/50
+
+## Thêm việc nếu thời gian cho phép
+
+- GIỮ NGUYÊN code và kiến trúc hiện tại (nó quá tốt rồi).
+- THÊM Observability: Thêm Prometheus (để show metric) và Grafana (làm vài cái dashboard đẹp mắt chiếu lúc bảo vệ đồ án: số lượng click, tỷ lệ lỗi, CPU usage). Đây là điểm "ăn tiền" nhất lúc demo.
+- THÊM Dead Letter Queue (DLQ) cho RabbitMQ (thể hiện bạn tư duy rất sâu về tính vẹn toàn dữ liệu - Data Integrity).
+  (Bonus) Nếu thời gian cho phép, viết script Load Test bằng k6 (bắn 10,000 req/s) và mở Grafana lên xem Circuit Breaker nhảy từ CLOSED sang OPEN như thế nào.

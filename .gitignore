@@ -1,1 +1,41 @@
 .editutor.log
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+main
+gateway/main
+services/*/main
+
+# Test binary, test logs, and coverage reports
+*.test
+*.out
+coverage.txt
+profile.out
+
+# Go workspace
+# Note: go.work is intentionally NOT ignored because the docs explicitly define it as part of the monorepo structure.
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# Environment variables
+.env
+.env.local
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+
+# OS specific files
+.DS_Store
+
+# Docker local data mapping
+data/
+db_data/
