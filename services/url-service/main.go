@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ikniz/url-shortener/shared/auth"
 	"github.com/ikniz/url-shortener/shared/logger"
 )
 
@@ -23,30 +22,6 @@ func main() {
 		logger.New("url-service").Error("config error", "error", err)
 		os.Exit(1)
 	}
-	defer mqConn.Close()
-
-	ch, err := mqConn.Channel()
-	if err != nil {
-		log.Error("rabbitmq channel", "error", err)
-		os.Exit(1)
-	}
-	defer ch.Close()
-
-	if err := DeclareExchange(ch, log); err != nil {
-		log.Error("declare exchange", "error", err)
-		os.Exit(1)
-	}
-
-	urlStore := NewURLStore(pool)
-	outboxStore := NewOutboxStore(pool)
-	publisher := NewRabbitMQPublisher(ch, log)
-	codeGen := NewShortCodeGenerator()
-	handler := NewHandler(pool, urlStore, outboxStore, cache, codeGen, cfg, log)
-
-	coordinator := NewOutboxCoordinator(outboxStore, publisher, log, cfg.OutboxPollInterval, cfg.OutboxWorkerCount)
-	go coordinator.Run(ctx)
-
-	authMw := auth.JWTMiddleware(cfg.JWTSecret)
 
 	log := logger.New(cfg.ServiceName)
 
