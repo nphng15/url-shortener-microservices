@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ikniz/url-shortener/shared/auth"
 	"github.com/ikniz/url-shortener/shared/events"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -40,15 +41,14 @@ func NewHTTPHandler(pool *pgxpool.Pool, store URLStore, outboxStore OutboxStore,
 // --- The Handler ---
 
 func (h *HTTPHandler) HandleShorten(w http.ResponseWriter, r *http.Request) {
-	// 3. Extract user claims
-	// (Assuming your JWT middleware stores a map of claims in context)
-	claims, ok := r.Context().Value("claims").(map[string]any)
+	// Extract user claims injected by JWTMiddleware
+	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "user not authenticated")
 		return
 	}
-	userID, _ := claims["sub"].(string)
-	userEmail, _ := claims["email"].(string)
+	userID := claims.Sub
+	userEmail := claims.Email
 
 	if userID == "" {
 		writeError(w, http.StatusUnauthorized, "invalid user token")
@@ -131,12 +131,12 @@ func (h *HTTPHandler) HandleRedirectAnon(w http.ResponseWriter, r *http.Request)
 
 func (h *HTTPHandler) HandleGetUrls(w http.ResponseWriter, r *http.Request) {
 	// JWT required, extract user_id
-	claims, ok := r.Context().Value("claims").(map[string]any)
+	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "user not authenticated")
 		return
 	}
-	userID, _ := claims["sub"].(string)
+	userID := claims.Sub
 
 	// Parse query params
 	var afterID string
@@ -168,13 +168,13 @@ func (h *HTTPHandler) HandleDeactivateUrl(w http.ResponseWriter, r *http.Request
 	}
 
 	// 1. JWT required, extract user_id & email
-	claims, ok := r.Context().Value("claims").(map[string]any)
+	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "user not authenticated")
 		return
 	}
-	userID, _ := claims["sub"].(string)
-	userEmail, _ := claims["email"].(string)
+	userID := claims.Sub
+	userEmail := claims.Email
 
 	if userID == "" {
 		writeError(w, http.StatusUnauthorized, "invalid user token")

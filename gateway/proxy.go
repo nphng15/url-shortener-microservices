@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 )
 
 type upstreamPathKey struct{}
@@ -32,8 +33,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request, upstreamName s
 	}
 
 	director := func(out *http.Request) {
-		out.URL.Scheme = "http"
-		out.URL.Host = baseURL
+		parsed, err := url.Parse(baseURL)
+		if err != nil || parsed.Host == "" {
+			// Treat baseURL as a plain host:port if it has no scheme
+			out.URL.Scheme = "http"
+			out.URL.Host = baseURL
+		} else {
+			out.URL.Scheme = parsed.Scheme
+			out.URL.Host = parsed.Host
+		}
 		out.URL.Path = upstreamPath
 
 		xff := r.Header.Get("X-Forwarded-For")

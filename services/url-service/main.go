@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ikniz/url-shortener/shared/auth"
 	"github.com/ikniz/url-shortener/shared/logger"
 )
 
@@ -66,14 +67,16 @@ func main() {
 	handler := NewHTTPHandler(pool, urlStore, outboxStore, cache, cgen, cfg.ShortURLBase)
 
 	// --- HTTP mux ---
+	authMw := auth.JWTMiddleware(cfg.JWTSecret)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", NewHealthHandler(cfg.ServiceName))
-	mux.HandleFunc("POST /shorten", handler.HandleShorten)
+	mux.Handle("POST /shorten", authMw(http.HandlerFunc(handler.HandleShorten)))
 	mux.HandleFunc("GET /{code}", handler.HandleRedirect)
 	mux.HandleFunc("POST /shorten-anon", handler.HandleShortenAnon)
 	mux.HandleFunc("GET /redirect-anon/{code}", handler.HandleRedirectAnon)
-	mux.HandleFunc("GET /urls", handler.HandleGetUrls)
-	mux.HandleFunc("DELETE /urls/{code}", handler.HandleDeactivateUrl)
+	mux.Handle("GET /urls", authMw(http.HandlerFunc(handler.HandleGetUrls)))
+	mux.Handle("DELETE /urls/{code}", authMw(http.HandlerFunc(handler.HandleDeactivateUrl)))
 
 	// --- HTTP Server ---
 	srv := &http.Server{

@@ -41,7 +41,11 @@ func NewOutboxStore(pool *pgxpool.Pool) OutboxStore {
 
 func (s *pgxOutboxStore) InsertEvent(ctx context.Context, tx pgx.Tx, outbox *OutboxRecord) error {
 	const query = `INSERT INTO outbox (id, event_type, payload, created_at) VALUES ($1, $2, $3, $4)`
-	_, err := tx.Exec(ctx, query, outbox.ID, outbox.EventType, outbox.Payload, outbox.CreatedAt)
+	if tx != nil {
+		_, err := tx.Exec(ctx, query, outbox.ID, outbox.EventType, outbox.Payload, outbox.CreatedAt)
+		return err
+	}
+	_, err := s.pool.Exec(ctx, query, outbox.ID, outbox.EventType, outbox.Payload, outbox.CreatedAt)
 	return err
 }
 
