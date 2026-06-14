@@ -2,43 +2,29 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 )
 
 var (
-	ErrURLNotFound     = err("url not found")
-	ErrShortCodeConflict = err("short code already taken")
-	ErrNotOwner        = err("not owner")
-	ErrURLGone        = err("url gone")
+	ErrNotFound      = errors.New("url not found")
+	ErrInvalidURL    = errors.New("invalid URL")
+	ErrAlreadyExists = errors.New("short code already exists")
+	ErrForbidden     = errors.New("forbidden")
+	ErrExpired       = errors.New("url has expired")
+	ErrDeactivated   = errors.New("url has been deactivated")
+	ErrDatabaseError = errors.New("database error")
+	ErrCacheError    = errors.New("cache error")
 )
 
-type err string
-
-func (e err) Error() string { return string(e) }
-
-type errorResponse struct {
-	Error string `json:"error"`
-}
-
-type fieldErrorResponse struct {
-	Error string `json:"error"`
-	Field string `json:"field,omitempty"`
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
+func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(errorResponse{Error: message})
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-func writeFieldError(w http.ResponseWriter, status int, message, field string) {
+func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(fieldErrorResponse{Error: message, Field: field})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	json.NewEncoder(w).Encode(data)
 }

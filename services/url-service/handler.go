@@ -2,471 +2,222 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"log/slog"
-	"net"
+	"math"
 	"net/http"
-	"net/url"
-	"os"
+	"strconv"
 	"time"
 
-	"github.com/ikniz/url-shortener/shared/auth"
+	"github.com/google/uuid"
 	"github.com/ikniz/url-shortener/shared/events"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Handler struct {
-	pool        *pgxpool.Pool
-	urlStore    URLRepository
-	outboxStore OutboxRepository
-	cache       *RedisCache
-	codeGen     *ShortCodeGenerator
-	cfg         *Config
-	log         *slog.Logger
+type HTTPHandler struct {
+	pool         *pgxpool.Pool // Required to start database transactions
+	store        URLStore
+	outboxStore  OutboxStore // Required for the outbox
+	cache        Cache
+	codegen      ShortCodeGenerator
+	shortURLBase string
+
+	urlService *URLService
 }
 
-func NewHandler(pool *pgxpool.Pool, urlStore URLRepository, outboxStore OutboxRepository, cache *RedisCache, codeGen *ShortCodeGenerator, cfg *Config, log *slog.Logger) *Handler {
-	return &Handler{
-		pool:        pool,
-		urlStore:    urlStore,
-		outboxStore: outboxStore,
-		cache:       cache,
-		codeGen:     codeGen,
-		cfg:         cfg,
-		log:         log,
+func NewHTTPHandler(pool *pgxpool.Pool, store URLStore, outboxStore OutboxStore, cache Cache, codegen ShortCodeGenerator, shortURLBase string) *HTTPHandler {
+	return &HTTPHandler{
+		pool:         pool,
+		store:        store,
+		outboxStore:  outboxStore,
+		cache:        cache,
+		codegen:      codegen,
+		shortURLBase: shortURLBase,
+
+		urlService: NewURLService(pool, store, outboxStore, cache, codegen, shortURLBase),
 	}
 }
 
-type shortenRequest struct {
-	URL       string     `json:"url"`
-	CustomCode *string    `json:"custom_code,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-}
+// --- The Handler ---
 
-type shortenResponse struct {
-	ShortCode   string  `json:"short_code"`
-	ShortURL    string  `json:"short_url"`
-	OriginalURL string  `json:"original_url"`
-	ExpiresAt   *string `json:"expires_at,omitempty"`
-}
-
-func (h *Handler) Shorten(w http.ResponseWriter, r *http.Request) {
-	claims, ok := auth.ClaimsFromContext(r.Context())
+func (h *HTTPHandler) HandleShorten(w http.ResponseWriter, r *http.Request) {
+	// 3. Extract user claims
+	// (Assuming your JWT middleware stores a map of claims in context)
+	claims, ok := r.Context().Value("claims").(map[string]any)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+		writeError(w, http.StatusUnauthorized, "user not authenticated")
+		return
+	}
+	userID, _ := claims["sub"].(string)
+	userEmail, _ := claims["email"].(string)
+
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "invalid user token")
 		return
 	}
 
-	if r.Header.Get("Content-Type") != "application/json" {
-		writeError(w, http.StatusUnsupportedMediaType, "content-type must be application/json")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var req shortenRequest
+	// 1. Parse JSON body
+	var req ShortenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.log.Warn("malformed JSON", "path", r.URL.Path)
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if err := validateURL(req.URL); err != nil {
-		writeFieldError(w, http.StatusUnprocessableEntity, err.Error(), "url")
+	urlRecord, httpError := h.urlService.ShortenURL(r.Context(), req.URL, userID, userEmail, req.ExpiresInHours)
+	if httpError != nil {
+		writeError(w, httpError.Status, httpError.Err.Error())
 		return
 	}
 
-	var expiresAt *time.Time
-	if req.ExpiresAt != nil {
-		if req.ExpiresAt.Before(time.Now()) {
-			writeFieldError(w, http.StatusUnprocessableEntity, "expires_at must be in the future", "expires_at")
-			return
-		}
-		expiresAt = req.ExpiresAt
-	}
-
-	shortCode := ""
-	if req.CustomCode != nil {
-		if err := validateCustomCode(*req.CustomCode); err != nil {
-			writeFieldError(w, http.StatusUnprocessableEntity, err.Error(), "custom_code")
-			return
-		}
-		shortCode = *req.CustomCode
-	}
-
-	var urlRec *URLRecord
-	var insertErr error
-	const maxRetries = 5
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if shortCode == "" {
-			shortCode = h.codeGen.Generate()
-		}
-
-		urlRec = &URLRecord{
-			ShortCode:   shortCode,
-			OriginalURL: req.URL,
-			UserID:      claims.Sub,
-			ExpiresAt:   expiresAt,
-		}
-
-		event := &events.URLCreatedEvent{
-			BaseEvent: events.BaseEvent{
-				EventType:     string(events.EventTypeURLCreated),
-				OccurredAt:    time.Now().UTC(),
-				EventID:       newUUID(),
-				CorrelationID: correlationIDFromRequest(r),
-			},
-			ShortCode:   shortCode,
-			OriginalURL: req.URL,
-			UserID:      claims.Sub,
-			UserEmail:   claims.Email,
-			ExpiresAt:   expiresAt,
-		}
-		payload, err := json.Marshal(event)
-		if err != nil {
-			h.log.Error("marshal event", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
-		}
-
-		outboxRec := &OutboxRecord{
-			EventType: string(events.EventTypeURLCreated),
-			Payload:   payload,
-		}
-
-		tx, err := h.pool.Begin(r.Context())
-		if err != nil {
-			h.log.Error("begin tx", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
-		}
-
-		insertErr = h.outboxStore.InsertWithURL(r.Context(), tx, urlRec, outboxRec)
-		if insertErr == nil {
-			if err := tx.Commit(r.Context()); err != nil {
-				tx.Rollback(r.Context())
-				h.log.Error("commit tx", "error", err)
-				writeError(w, http.StatusInternalServerError, "internal server error")
-				return
-			}
-			break
-		}
-
-		tx.Rollback(r.Context())
-
-		if errors.Is(insertErr, ErrShortCodeConflict) {
-			if req.CustomCode != nil {
-				writeFieldError(w, http.StatusConflict, "short code already taken", "custom_code")
-				return
-			}
-			shortCode = ""
-			continue
-		}
-
-		h.log.Error("insert url+outbox", "error", insertErr, "attempt", attempt)
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	if insertErr != nil {
-		h.log.Error("short code collision exhausted", "attempts", maxRetries)
-		writeError(w, http.StatusServiceUnavailable, "service temporarily unavailable, try again")
-		return
-	}
-
-	var expiresAtStr *string
-	if urlRec.ExpiresAt != nil {
-		s := urlRec.ExpiresAt.Format(time.RFC3339)
-		expiresAtStr = &s
-	}
-	writeJSON(w, http.StatusCreated, shortenResponse{
-		ShortCode:   urlRec.ShortCode,
-		ShortURL:    h.cfg.ShortURLBase + "/" + urlRec.ShortCode,
-		OriginalURL: urlRec.OriginalURL,
-		ExpiresAt:   expiresAtStr,
-	})
+	// 7. Return 201 Created
+	writeJSON(w, http.StatusCreated, urlRecord)
 }
 
-func (h *Handler) Redirect(w http.ResponseWriter, r *http.Request) {
-	code := r.PathValue("code")
-	if code == "" {
-		writeError(w, http.StatusNotFound, "not found")
+func (h *HTTPHandler) HandleRedirect(w http.ResponseWriter, r *http.Request) {
+	shortcode := r.PathValue("code")
+	if shortcode == "" {
+		writeError(w, http.StatusBadRequest, "missing short code")
 		return
 	}
 
-	cacheCtx, cancel := context.WithTimeout(r.Context(), 50*time.Millisecond)
-	defer cancel()
-	cached, hit := h.cache.Get(cacheCtx, code)
-	if hit {
-		if !cached.IsActive {
-			writeError(w, http.StatusGone, "url has been deactivated")
-			return
-		}
-		if cached.ExpiresAt != nil && cached.ExpiresAt.Before(time.Now()) {
-			writeError(w, http.StatusGone, "url has expired")
-			return
-		}
-		http.Redirect(w, r, cached.OriginalURL, http.StatusMovedPermanently)
+	redirectInfo, httpError := h.urlService.RedirectToURL(r.Context(), shortcode, r.RemoteAddr)
+	if httpError != nil {
+		writeError(w, httpError.Status, httpError.Err.Error())
 		return
 	}
 
-	urlRec, err := h.urlStore.FindByCode(r.Context(), code)
-	if errors.Is(err, ErrURLNotFound) {
-		writeError(w, http.StatusNotFound, "short url not found")
-		return
-	}
-	if err != nil {
-		h.log.Error("find url by code", "code", code, "error", err)
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
+	go h.writeAnalyticsEvent(r, shortcode, redirectInfo.IpHash)
 
-	if !urlRec.IsActive {
-		writeError(w, http.StatusGone, "url has been deactivated")
-		return
-	}
-	if urlRec.ExpiresAt != nil && urlRec.ExpiresAt.Before(time.Now()) {
-		writeError(w, http.StatusGone, "url has expired")
-		return
-	}
-
-	setCtx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
-	defer cancel()
-	h.cache.Set(setCtx, code, &CachedURL{
-		OriginalURL: urlRec.OriginalURL,
-		ExpiresAt:   urlRec.ExpiresAt,
-		IsActive:    urlRec.IsActive,
-	}, urlRec.ExpiresAt)
-
-	clickEvent := &events.URLClickedEvent{
-		BaseEvent: events.BaseEvent{
-			EventType:     string(events.EventTypeURLClicked),
-			OccurredAt:    time.Now().UTC(),
-			EventID:       newUUID(),
-			CorrelationID: correlationIDFromRequest(r),
-		},
-		ShortCode: code,
-		IPHash:    hashIP(r.RemoteAddr),
-		UserAgent: r.Header.Get("User-Agent"),
-		Referer:   r.Header.Get("Referer"),
-		ClickedAt: time.Now().UTC(),
-	}
-	payload, _ := json.Marshal(clickEvent)
-	tx, err := h.pool.Begin(r.Context())
-	if err == nil {
-		outboxRec := &OutboxRecord{EventType: string(events.EventTypeURLClicked), Payload: payload}
-		if err := h.outboxStore.InsertEvent(r.Context(), tx, outboxRec); err != nil {
-			tx.Rollback(r.Context())
-			h.log.Warn("insert click event outbox", "code", code, "error", err)
-		} else {
-			if err := tx.Commit(r.Context()); err != nil {
-				h.log.Warn("commit click tx", "error", err)
-			}
-		}
-	} else {
-		h.log.Warn("begin click tx", "error", err)
-	}
-
-	http.Redirect(w, r, urlRec.OriginalURL, http.StatusMovedPermanently)
+	// Redirect
+	http.Redirect(w, r, redirectInfo.OriginalURL, http.StatusPermanentRedirect)
 }
 
-type listResponse struct {
-	URLs       []urlItem `json:"urls"`
-	NextCursor *string  `json:"next_cursor"`
+func (h *HTTPHandler) HandleShortenAnon(w http.ResponseWriter, r *http.Request) {
+
+	// 1. Parse JSON body
+	var req ShortenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	urlRecord, httpError := h.urlService.ShortenURL(r.Context(), req.URL, uuid.NewString(), uuid.NewString(), req.ExpiresInHours)
+	if httpError != nil {
+		writeError(w, httpError.Status, httpError.Err.Error())
+		return
+	}
+
+	// 7. Return 201 Created
+	writeJSON(w, http.StatusCreated, urlRecord)
 }
 
-type urlItem struct {
-	ShortCode   string  `json:"short_code"`
-	ShortURL    string  `json:"short_url"`
-	OriginalURL string  `json:"original_url"`
-	CreatedAt   string  `json:"created_at"`
-	ExpiresAt   *string `json:"expires_at,omitempty"`
+func (h *HTTPHandler) HandleRedirectAnon(w http.ResponseWriter, r *http.Request) {
+	shortcode := r.PathValue("code")
+	if shortcode == "" {
+		writeError(w, http.StatusBadRequest, "missing short code")
+		return
+	}
+
+	redirectInfo, httpError := h.urlService.RedirectToURL(r.Context(), shortcode, r.RemoteAddr)
+	if httpError != nil {
+		writeError(w, httpError.Status, httpError.Err.Error())
+		return
+	}
+
+	go h.writeAnalyticsEvent(r, shortcode, redirectInfo.IpHash)
+
+	// Redirect
+	http.Redirect(w, r, redirectInfo.OriginalURL, http.StatusPermanentRedirect)
 }
 
-func (h *Handler) ListURLs(w http.ResponseWriter, r *http.Request) {
-	claims, ok := auth.ClaimsFromContext(r.Context())
+func (h *HTTPHandler) HandleGetUrls(w http.ResponseWriter, r *http.Request) {
+	// JWT required, extract user_id
+	claims, ok := r.Context().Value("claims").(map[string]any)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+		writeError(w, http.StatusUnauthorized, "user not authenticated")
 		return
 	}
+	userID, _ := claims["sub"].(string)
 
-	after := r.URL.Query().Get("after")
+	// Parse query params
+	var afterID string
+	if val := r.URL.Query().Get("after"); val != "" {
+		afterID = val
+	}
 	limit := 20
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if n := parseIntSafe(l); n > 0 && n <= 50 {
-			limit = n
+	if val := r.URL.Query().Get("limit"); val != "" {
+		parsed, err := strconv.Atoi(val)
+		if err == nil {
+			limit = int(math.Max(math.Min(float64(parsed), 100), 1))
 		}
 	}
 
-	recs, nextCursor, err := h.urlStore.FindByUserID(r.Context(), claims.Sub, after, limit)
+	urls, err := h.urlService.GetUserUrls(r.Context(), userID, afterID, limit)
 	if err != nil {
-		h.log.Error("find urls by user", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, err.Status, err.Err.Error())
 		return
 	}
 
-	items := make([]urlItem, len(recs))
-	for i, rec := range recs {
-		item := urlItem{
-			ShortCode:   rec.ShortCode,
-			ShortURL:    h.cfg.ShortURLBase + "/" + rec.ShortCode,
-			OriginalURL: rec.OriginalURL,
-			CreatedAt:   rec.CreatedAt.Format(time.RFC3339),
-		}
-		if rec.ExpiresAt != nil {
-			s := rec.ExpiresAt.Format(time.RFC3339)
-			item.ExpiresAt = &s
-		}
-		items[i] = item
-	}
-
-	var cursor *string
-	if nextCursor != "" {
-		cursor = &nextCursor
-	}
-
-	writeJSON(w, http.StatusOK, listResponse{URLs: items, NextCursor: cursor})
+	writeJSON(w, http.StatusOK, urls)
 }
 
-func (h *Handler) DeleteURL(w http.ResponseWriter, r *http.Request) {
-	claims, ok := auth.ClaimsFromContext(r.Context())
+func (h *HTTPHandler) HandleDeactivateUrl(w http.ResponseWriter, r *http.Request) {
+	shortcode := r.PathValue("code")
+	if shortcode == "" {
+		writeError(w, http.StatusBadRequest, "missing short code")
+		return
+	}
+
+	// 1. JWT required, extract user_id & email
+	claims, ok := r.Context().Value("claims").(map[string]any)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+		writeError(w, http.StatusUnauthorized, "user not authenticated")
+		return
+	}
+	userID, _ := claims["sub"].(string)
+	userEmail, _ := claims["email"].(string)
+
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "invalid user token")
 		return
 	}
 
-	code := r.PathValue("code")
-	if code == "" {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-
-	tx, err := h.pool.Begin(r.Context())
+	err := h.urlService.DeactivateURL(r.Context(), shortcode, userID, userEmail)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeError(w, err.Status, err.Err.Error())
 		return
 	}
-
-	urlRec, err := h.urlStore.FindByCode(r.Context(), code)
-	if errors.Is(err, ErrURLNotFound) {
-		tx.Rollback(r.Context())
-		writeError(w, http.StatusNotFound, "short url not found")
-		return
-	}
-	if err != nil {
-		tx.Rollback(r.Context())
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	if urlRec.UserID != claims.Sub {
-		tx.Rollback(r.Context())
-		writeError(w, http.StatusForbidden, "forbidden")
-		return
-	}
-
-	if err := h.urlStore.Deactivate(r.Context(), code, claims.Sub); err != nil {
-		tx.Rollback(r.Context())
-		if errors.Is(err, ErrURLNotFound) {
-			writeError(w, http.StatusNotFound, "short url not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	event := &events.URLDeletedEvent{
-		BaseEvent: events.BaseEvent{
-			EventType:     string(events.EventTypeURLDeleted),
-			OccurredAt:    time.Now().UTC(),
-			EventID:       newUUID(),
-			CorrelationID: correlationIDFromRequest(r),
-		},
-		ShortCode: code,
-		UserID:    claims.Sub,
-		UserEmail: claims.Email,
-	}
-	payload, _ := json.Marshal(event)
-	outboxRec := &OutboxRecord{EventType: string(events.EventTypeURLDeleted), Payload: payload}
-	if err := h.outboxStore.InsertEvent(r.Context(), tx, outboxRec); err != nil {
-		tx.Rollback(r.Context())
-		h.log.Error("insert delete event outbox", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	if err := tx.Commit(r.Context()); err != nil {
-		h.log.Error("commit delete tx", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	delCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	h.cache.Del(delCtx, code)
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func parseIntSafe(s string) int {
-	var n int
-	fmt.Sscanf(s, "%d", &n)
-	return n
-}
+// --- New Helper Method ---
 
-func newUUID() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
-}
+func (h *HTTPHandler) writeAnalyticsEvent(r *http.Request, shortCode, ipHash string) {
+	// Get User-Agent and Referer from request
+	userAgent := r.Header.Get("User-Agent")
+	referrer := r.Header.Get("Referer")
 
-func validateURL(rawURL string) error {
-	if rawURL == "" {
-		return fmt.Errorf("url must not be empty")
+	// Create event (using the shared events package)
+	event := events.URLClickedEvent{
+		BaseEvent: events.NewBaseEvent(events.EventTypeURLClicked, ""),
+		ShortCode: shortCode,
+		IPHash:    ipHash,
+		UserAgent: userAgent,
+		Referer:   referrer,
+		ClickedAt: time.Now(),
 	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("url must be a valid URL")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("url scheme must be http or https")
-	}
-	if u.Host == "" {
-		return fmt.Errorf("url must include a host")
-	}
-	return nil
-}
 
-func validateCustomCode(code string) error {
-	if len(code) < 3 || len(code) > 10 {
-		return fmt.Errorf("custom code must be 3-10 characters")
-	}
-	for _, c := range code {
-		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
-			return fmt.Errorf("custom code must be alphanumeric")
-		}
-	}
-	return nil
-}
+	payload, _ := json.Marshal(event)
 
-var ipHashSalt = os.Getenv("IP_HASH_SALT")
-
-func hashIP(remoteAddr string) string {
-	ip, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		ip = remoteAddr
+	outbox := &OutboxRecord{
+		ID:        uuid.NewString(),
+		EventType: string(events.EventTypeURLClicked),
+		Payload:   payload,
+		CreatedAt: time.Now(),
 	}
-	h := sha256.Sum256([]byte(ip + ipHashSalt))
-	return fmt.Sprintf("%x", h)
-}
 
-func correlationIDFromRequest(r *http.Request) string {
-	id := r.Header.Get("X-Correlation-ID")
-	if id == "" {
-		return newUUID()
-	}
-	return id
+	// We can ignore the error here - this is an analytics event,
+	// the system should still function if analytics DB is down.
+	// But for robustness, we could log it.
+	_ = h.outboxStore.InsertEvent(context.Background(), nil, outbox)
 }

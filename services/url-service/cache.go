@@ -3,67 +3,56 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
+// CachedURL is the Redis-stored projection for the redirect path.
+// Small enough to fit in a single Redis string value.
+// Storing is_active avoids returning 301 for a deactivated URL cached before deletion.
 type CachedURL struct {
 	OriginalURL string     `json:"original_url"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	IsActive    bool       `json:"is_active"`
 }
 
-type RedisCache struct {
+type Cache interface {
+	Get(ctx context.Context, code string) (*CachedURL, error)
+	Set(ctx context.Context, code string, cached *CachedURL, ttl time.Duration) error
+	Delete(ctx context.Context, code string) error
+}
+
+type redisCache struct {
 	client *redis.Client
-	log    *slog.Logger
 }
 
-func NewRedisCache(client *redis.Client, log *slog.Logger) *RedisCache {
-	return &RedisCache{client: client, log: log}
+func NewRedisCache(client *redis.Client) Cache {
+	return &redisCache{client: client}
 }
 
-func (c *RedisCache) Get(ctx context.Context, shortCode string) (*CachedURL, bool) {
-	key := "url:" + shortCode
-	val, err := c.client.Get(ctx, key).Bytes()
+func (c *redisCache) Get(ctx context.Context, code string) (*CachedURL, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	data, err := c.client.Get(timeoutCtx, code).Result()
 	if err != nil {
-		if err == redis.Nil {
-			return nil, false
-		}
-		c.log.Warn("redis get failed", "key", key, "error", err)
-		return nil, false
+		return nil, nil
 	}
 	var cached CachedURL
-	if err := json.Unmarshal(val, &cached); err != nil {
-		c.log.Warn("redis unmarshal failed", "key", key, "error", err)
-		return nil, false
+	if err := json.Unmarshal([]byte(data), &cached); err != nil {
+		return nil, nil
 	}
-	return &cached, true
+	return &cached, nil
 }
 
-func (c *RedisCache) Set(ctx context.Context, shortCode string, url *CachedURL, expiresAt *time.Time) {
-	key := "url:" + shortCode
-	data, err := json.Marshal(url)
+func (c *redisCache) Set(ctx context.Context, code string, cached *CachedURL, ttl time.Duration) error {
+	data, err := json.Marshal(cached)
 	if err != nil {
-		c.log.Warn("redis marshal failed", "key", key, "error", err)
-		return
+		return err
 	}
-	ttl := time.Hour
-	if expiresAt != nil {
-		ttl = time.Until(*expiresAt)
-		if ttl <= 0 {
-			return
-		}
-	}
-	if err := c.client.Set(ctx, key, data, ttl).Err(); err != nil {
-		c.log.Warn("redis set failed", "key", key, "error", err)
-	}
+	return c.client.Set(ctx, code, data, ttl).Err()
 }
 
-func (c *RedisCache) Del(ctx context.Context, shortCode string) {
-	key := "url:" + shortCode
-	if err := c.client.Del(ctx, key).Err(); err != nil {
-		c.log.Warn("redis del failed", "key", key, "error", err)
-	}
+func (c *redisCache) Delete(ctx context.Context, code string) error {
+	return c.client.Del(ctx, code).Err()
 }

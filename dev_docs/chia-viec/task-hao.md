@@ -10,20 +10,20 @@
 
 ### Ngày 1-2: M1 — url-service scaffold
 ```
-[ ] config.go — loadConfig từ env vars (DATABASE_URL, REDIS_URL, RABBITMQ_URL, JWT_SECRET, SHORT_URL_BASE, IP_HASH_SALT, PORT)
-[ ] db.go — NewDBPool (pgxpool, MaxConns=10, MinConns=2, ping 10s timeout, fatal khi fail)
-[ ] redis.go — NewRedisClient (parse URL, ping 3s timeout, NON-FATAL khi fail, return client+bool)
-[ ] rabbitmq.go — NewRabbitMQConn (exponential backoff, max 10 attempts, declare exchange "url-shortener" topic)
-[ ] health.go — GET /health -> 200 {"status":"ok","service":"url-service"} (pre-encoded JSON)
-[ ] main.go — wire config->db->redis->rabbitmq->mux->server, graceful shutdown SIGTERM/SIGINT
-[ ] Dockerfile, go.mod
+[X] config.go — loadConfig từ env vars (DATABASE_URL, REDIS_URL, RABBITMQ_URL, JWT_SECRET, SHORT_URL_BASE, IP_HASH_SALT, PORT)
+[X] db.go — NewDBPool (pgxpool, MaxConns=10, MinConns=2, ping 10s timeout, fatal khi fail)
+[X] redis.go — NewRedisClient (parse URL, ping 3s timeout, NON-FATAL khi fail, return client+bool)
+[X] rabbitmq.go — NewRabbitMQConn (exponential backoff, max 10 attempts, declare exchange "url-shortener" topic)
+[X] health.go — GET /health -> 200 {"status":"ok","service":"url-service"} (pre-encoded JSON)
+[X] main.go — wire config->db->redis->rabbitmq->mux->server, graceful shutdown SIGTERM/SIGINT
+[X] Dockerfile, go.mod
 ```
 
 Check: `docker compose up --build`, url-service healthy, /health -> 200
 
 ### Ngày 3-5: Bắt đầu M3 sớm
 ```
-[ ] migration.sql:
+[X] migration.sql:
     - urls table: id UUID PK, short_code VARCHAR(10) UNIQUE NOT NULL, original_url TEXT NOT NULL,
       user_id UUID NOT NULL, created_at TIMESTAMPTZ DEFAULT now(), expires_at TIMESTAMPTZ NULL, is_active BOOLEAN DEFAULT true
     - outbox table: id UUID PK, event_type TEXT NOT NULL, payload JSONB NOT NULL,
@@ -32,18 +32,18 @@ Check: `docker compose up --build`, url-service healthy, /health -> 200
     - idx_urls_user_id_created (user_id, created_at DESC)
     - idx_outbox_unpublished (created_at ASC) WHERE published_at IS NULL
 
-[ ] base62.go — alphabet "0-9A-Za-z", Encode([]byte) string
-[ ] codegen.go — ShortCodeGenerator interface + cryptoRandGenerator (crypto/rand, big.Int mod 62^7)
+[X] base62.go — alphabet "0-9A-Za-z", Encode([]byte) string
+[X] codegen.go — ShortCodeGenerator interface + cryptoRandGenerator (crypto/rand, big.Int mod 62^7)
       KHÔNG DÙNG math/rand
 
-[ ] store.go (pgxURLStore):
+[X] store.go (pgxURLStore):
     - Insert(ctx, tx, record) error
     - FindByCode(ctx, shortCode) (*URLRecord, error) — check is_active + expires_at
     - FindByUserID(ctx, userID, afterID, limit) ([]URLRecord, error) — cursor pagination, newest-first
     - Deactivate(ctx, tx, shortCode, userID) error — set is_active=false, verify ownership
 
-[ ] validate.go — URL phải có scheme (http/https) + host. Reject empty, invalid scheme.
-[ ] cache.go (RedisCache):
+[X] validate.go — URL phải có scheme (http/https) + host. Reject empty, invalid scheme.
+[X] cache.go (RedisCache):
     - Get(ctx, code) (*CachedURL, error) — Redis GET với 50ms timeout, error -> return nil (non-fatal)
     - Set(ctx, code, cached, ttl) — TTL = min(expires_at - now, 1h). URL không có expiry -> 1h
     - Delete(ctx, code) — gọi ngay sau khi deactivate URL
@@ -52,13 +52,15 @@ Check: `docker compose up --build`, url-service healthy, /health -> 200
 
 ### Ngày 6-7: M3 handler + outbox_store
 ```
-[ ] outbox_store.go (pgxOutboxStore):
-    - InsertWithURL(ctx, tx, url, outbox) error — TRONG CÙNG TRANSACTION với URL insert
+[X] outbox_store.go (pgxOutboxStore):
+    - InsertWithURL(ctx, tx, url, outbox) error — TRONG CÙNG TRANSACTION với URL insert 
+    ^ Cái này không chắc lắm. Tại Handler sẽ gọi store insert URL, sau đó lại gọi outbox store insert event.?
+    Check lại!
     - InsertEvent(ctx, tx, outbox) error — cho DELETE (outbox event trong cùng tx với deactivate)
     - FetchUnpublished(ctx, limit) ([]*OutboxRecord, error) — SELECT ... FOR UPDATE SKIP LOCKED
     - MarkPublished(ctx, id) error — SET published_at = now()
 
-[ ] handler.go — POST /shorten:
+[X] handler.go — POST /shorten:
     1. Parse JSON body {url, expires_in_hours}
     2. Validate URL (scheme + host)
     3. Extract user claims từ JWT context (ClaimsFromContext)
@@ -67,7 +69,7 @@ Check: `docker compose up --build`, url-service healthy, /health -> 200
     6. Collision retry: nếu short_code UNIQUE violation -> generate lại, max 3 retries
     7. Return 201 {short_code, short_url, original_url, expires_at}
 
-[ ] handler.go — GET /{code}:
+[X] handler.go — GET /{code}:
     1. Redis GET (50ms timeout) -> hit: check is_active + expires_at
     2. Miss hoặc error: PostgreSQL FindByCode
     3. URL không tồn tại -> 404
@@ -79,13 +81,13 @@ Check: `docker compose up --build`, url-service healthy, /health -> 200
     8. Write outbox URLClickedEvent (ip_hash, user_agent, referer)
     9. Return 301 redirect
 
-[ ] handler.go — GET /urls:
+[] handler.go — GET /urls:
     1. JWT required, extract user_id
     2. Query param: ?after=<uuid>&limit=20
     3. FindByUserID cursor pagination
     4. Return 200 {urls: [...], next_cursor: "uuid"}
 
-[ ] handler.go — DELETE /urls/{code}:
+[X] handler.go — DELETE /urls/{code}:
     1. JWT required, extract user_id
     2. BEGIN tx -> Deactivate (check ownership, user_id không khớp -> 403) + Insert outbox (URLDeletedEvent, bao gồm user_email) -> COMMIT
     3. Redis Delete (invalidate cache ngay sau commit)
@@ -98,10 +100,10 @@ Check: `docker compose up --build`, url-service healthy, /health -> 200
 
 ### Ngày 8-10: Hoàn thành M3
 ```
-[ ] errors.go — sentinel errors (ErrNotFound, ErrAlreadyExists, ErrForbidden, ErrExpired, ErrDeactivated)
+[X] errors.go — sentinel errors (ErrNotFound, ErrAlreadyExists, ErrForbidden, ErrExpired, ErrDeactivated)
     writeError(w, status, message) + writeJSON(w, status, data) helpers
 
-[ ] Mở rộng main.go — full wiring:
+[-X] Mở rộng main.go — full wiring:
     - runMigrations(ctx, pool)
     - Khởi tạo stores, cache, codegen, handler
     - Wire JWT middleware từ shared/auth

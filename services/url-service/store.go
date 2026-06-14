@@ -2,226 +2,108 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// URLRecord is the domain object mapped from the urls table.
+// Never returned directly in HTTP responses — projection structs handle serialization.
 type URLRecord struct {
-	ID          string
+	ID          string // UUID string
 	ShortCode   string
 	OriginalURL string
-	UserID      string
+	UserID      string // UUID string
 	CreatedAt   time.Time
-	ExpiresAt   *time.Time
+	ExpiresAt   *time.Time // nil if no expiry
 	IsActive    bool
 }
 
-type OutboxRecord struct {
-	ID          string
-	EventType   string
-	Payload     []byte
-	CreatedAt   time.Time
-	PublishedAt *time.Time
-}
-
-type URLRepository interface {
-	Insert(ctx context.Context, rec *URLRecord) (*URLRecord, error)
+type URLStore interface {
+	Insert(ctx context.Context, tx pgx.Tx, record *URLRecord) error
 	FindByCode(ctx context.Context, shortCode string) (*URLRecord, error)
-	FindByUserID(ctx context.Context, userID, afterID string, limit int) ([]*URLRecord, string, error)
-	Deactivate(ctx context.Context, shortCode, userID string) error
+	FindByUserID(ctx context.Context, userID string, afterID string, limit int) ([]URLRecord, error)
+	Deactivate(ctx context.Context, tx pgx.Tx, shortCode, userID string) error
 }
 
 type pgxURLStore struct {
 	pool *pgxpool.Pool
 }
 
-func NewURLStore(pool *pgxpool.Pool) URLRepository {
+func NewURLStore(pool *pgxpool.Pool) URLStore {
 	return &pgxURLStore{pool: pool}
 }
 
-func (s *pgxURLStore) Insert(ctx context.Context, rec *URLRecord) (*URLRecord, error) {
-	query := `
-		INSERT INTO urls (short_code, original_url, user_id, expires_at)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, short_code, original_url, user_id, created_at, expires_at, is_active
-	`
-	var out URLRecord
-	err := s.pool.QueryRow(ctx, query, rec.ShortCode, rec.OriginalURL, rec.UserID, rec.ExpiresAt).Scan(
-		&out.ID, &out.ShortCode, &out.OriginalURL, &out.UserID, &out.CreatedAt, &out.ExpiresAt, &out.IsActive,
-	)
-	if err != nil {
-		if isPgUniqueViolation(err) {
-			return nil, ErrShortCodeConflict
-		}
-		return nil, fmt.Errorf("insert url: %w", err)
-	}
-	return &out, nil
+func (s *pgxURLStore) Insert(ctx context.Context, tx pgx.Tx, record *URLRecord) error {
+	const query = `INSERT INTO urls (id, short_code, original_url, user_id, created_at, expires_at, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7)`
+	_, err := tx.Exec(ctx, query, record.ID, record.ShortCode, record.OriginalURL, record.UserID, record.CreatedAt, record.ExpiresAt, record.IsActive)
+	return err
 }
 
 func (s *pgxURLStore) FindByCode(ctx context.Context, shortCode string) (*URLRecord, error) {
-	query := `
-		SELECT id, short_code, original_url, user_id, created_at, expires_at, is_active
-		FROM urls WHERE short_code = $1
-	`
-	var rec URLRecord
-	err := s.pool.QueryRow(ctx, query, shortCode).Scan(
-		&rec.ID, &rec.ShortCode, &rec.OriginalURL, &rec.UserID, &rec.CreatedAt, &rec.ExpiresAt, &rec.IsActive,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrURLNotFound
-	}
+	const query = `SELECT id, short_code, original_url, user_id, created_at, expires_at, is_active FROM urls
+	WHERE short_code = $1 AND is_active = true AND (expires_at IS NULL OR expires_at > NOW())`
+	var r URLRecord
+	err := s.pool.QueryRow(ctx, query, shortCode).Scan(&r.ID, &r.ShortCode, &r.OriginalURL, &r.UserID, &r.CreatedAt, &r.ExpiresAt, &r.IsActive)
 	if err != nil {
-		return nil, fmt.Errorf("find url by code: %w", err)
+		if err == pgx.ErrNoRows {
+			return nil, nil // return nil record when not found
+		}
+		return nil, err
 	}
-	return &rec, nil
+	return &r, nil
 }
 
-func (s *pgxURLStore) FindByUserID(ctx context.Context, userID, afterID string, limit int) ([]*URLRecord, string, error) {
-	var rows []URLRecord
-	var err error
-	var nextCursor string
+func (s *pgxURLStore) FindByUserID(ctx context.Context, userID string, afterID string, limit int) ([]URLRecord, error) {
+	var query string
+	var args []any
 
-	if afterID == "" {
-		query := `
-			SELECT id, short_code, original_url, user_id, created_at, expires_at, is_active
-			FROM urls WHERE user_id = $1
-			ORDER BY created_at DESC, id DESC LIMIT $2
-		`
-		r, err := s.pool.Query(ctx, query, userID, limit+1)
-		if err != nil {
-			return nil, "", fmt.Errorf("find urls by user: %w", err)
-		}
-		rows, err = pgx.CollectRows(r, pgx.RowToStructByName[URLRecord])
+	// Fetch limit + 1 to determine if there is a next page
+	fetchLimit := limit + 1
+
+	if afterID != "" {
+		query = `SELECT id, short_code, original_url, user_id, created_at, expires_at, is_active FROM urls 
+		WHERE user_id = $1 AND id < $2 AND is_active = true AND (expires_at IS NULL OR expires_at > NOW()) 
+		ORDER BY id DESC LIMIT $3`
+		args = []any{userID, afterID, fetchLimit}
 	} else {
-		query := `
-			SELECT id, short_code, original_url, user_id, created_at, expires_at, is_active
-			FROM urls WHERE user_id = $1
-			  AND (created_at, id) < (SELECT created_at, id FROM urls WHERE id = $2)
-			ORDER BY created_at DESC, id DESC LIMIT $3
-		`
-		r, err := s.pool.Query(ctx, query, userID, afterID, limit+1)
-		if err != nil {
-			return nil, "", fmt.Errorf("find urls by user: %w", err)
-		}
-		rows, err = pgx.CollectRows(r, pgx.RowToStructByName[URLRecord])
+		query = `SELECT id, short_code, original_url, user_id, created_at, expires_at, is_active FROM urls 
+		WHERE user_id = $1 AND is_active = true AND (expires_at IS NULL OR expires_at > NOW())
+		ORDER BY id DESC LIMIT $2`
+		args = []any{userID, fetchLimit}
 	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, "", fmt.Errorf("find urls by user: %w", err)
+		return nil, err
 	}
+	defer rows.Close()
 
-	if len(rows) > limit {
-		nextCursor = rows[limit].ID
-		rows = rows[:limit]
-	}
-
-	ptrs := make([]*URLRecord, len(rows))
-	for i := range rows {
-		ptrs[i] = &rows[i]
-	}
-	return ptrs, nextCursor, nil
-}
-
-func (s *pgxURLStore) Deactivate(ctx context.Context, shortCode, userID string) error {
-	query := `UPDATE urls SET is_active = false WHERE short_code = $1 RETURNING user_id`
-	var ownerID string
-	err := s.pool.QueryRow(ctx, query, shortCode).Scan(&ownerID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrURLNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("deactivate url: %w", err)
-	}
-	if ownerID != userID {
-		return ErrNotOwner
-	}
-	return nil
-}
-
-type OutboxRepository interface {
-	InsertWithURL(ctx context.Context, tx pgx.Tx, urlRec *URLRecord, outboxRec *OutboxRecord) error
-	InsertEvent(ctx context.Context, tx pgx.Tx, outboxRec *OutboxRecord) error
-	FetchUnpublished(ctx context.Context, limit int) ([]*OutboxRecord, error)
-	MarkPublished(ctx context.Context, id string) error
-}
-
-type pgxOutboxStore struct {
-	pool *pgxpool.Pool
-}
-
-func NewOutboxStore(pool *pgxpool.Pool) OutboxRepository {
-	return &pgxOutboxStore{pool: pool}
-}
-
-func (s *pgxOutboxStore) InsertWithURL(ctx context.Context, tx pgx.Tx, urlRec *URLRecord, outboxRec *OutboxRecord) error {
-	row := tx.QueryRow(ctx,
-		`INSERT INTO urls (short_code, original_url, user_id, expires_at)
-		 VALUES ($1, $2, $3, $4)
-		 RETURNING id, short_code, original_url, user_id, created_at, expires_at, is_active`,
-		urlRec.ShortCode, urlRec.OriginalURL, urlRec.UserID, urlRec.ExpiresAt,
-	)
-	if err := row.Scan(&urlRec.ID, &urlRec.ShortCode, &urlRec.OriginalURL,
-		&urlRec.UserID, &urlRec.CreatedAt, &urlRec.ExpiresAt, &urlRec.IsActive); err != nil {
-		if isPgUniqueViolation(err) {
-			return ErrShortCodeConflict
-		}
-		return fmt.Errorf("insert url in tx: %w", err)
-	}
-	return s.InsertEvent(ctx, tx, outboxRec)
-}
-
-func (s *pgxOutboxStore) InsertEvent(ctx context.Context, tx pgx.Tx, outboxRec *OutboxRecord) error {
-	row := tx.QueryRow(ctx,
-		`INSERT INTO outbox (event_type, payload) VALUES ($1, $2) RETURNING id, created_at`,
-		outboxRec.EventType, outboxRec.Payload,
-	)
-	if err := row.Scan(&outboxRec.ID, &outboxRec.CreatedAt); err != nil {
-		return fmt.Errorf("insert outbox event: %w", err)
-	}
-	return nil
-}
-
-func (s *pgxOutboxStore) FetchUnpublished(ctx context.Context, limit int) ([]*OutboxRecord, error) {
-	query := `
-		SELECT id, event_type, payload, created_at
-		FROM outbox WHERE published_at IS NULL
-		ORDER BY created_at ASC LIMIT $1
-		FOR UPDATE SKIP LOCKED
-	`
-	rows, err := s.pool.Query(ctx, query, limit)
-	if err != nil {
-		return nil, fmt.Errorf("fetch unpublished outbox: %w", err)
-	}
-	recs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (*OutboxRecord, error) {
-		var r OutboxRecord
-		if err := row.Scan(&r.ID, &r.EventType, &r.Payload, &r.CreatedAt); err != nil {
+	var results []URLRecord
+	for rows.Next() {
+		var r URLRecord
+		if err := rows.Scan(&r.ID, &r.ShortCode, &r.OriginalURL, &r.UserID, &r.CreatedAt, &r.ExpiresAt, &r.IsActive); err != nil {
 			return nil, err
 		}
-		return &r, nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fetch unpublished outbox: %w", err)
+		results = append(results, r)
 	}
-	return recs, nil
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
-func (s *pgxOutboxStore) MarkPublished(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE outbox SET published_at = now() WHERE id = $1`, id)
+func (s *pgxURLStore) Deactivate(ctx context.Context, tx pgx.Tx, shortCode, userID string) error {
+	const query = `UPDATE urls SET is_active = false WHERE short_code = $1 AND user_id = $2 AND is_active = true`
+	cmdTag, err := tx.Exec(ctx, query, shortCode, userID)
 	if err != nil {
-		return fmt.Errorf("mark outbox published: %w", err)
+		return err
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
 	}
 	return nil
-}
-
-func isPgUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23505"
-	}
-	return strings.Contains(err.Error(), "duplicate key")
 }
