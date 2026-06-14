@@ -18,7 +18,6 @@ type OutboxRecord struct {
 }
 
 type OutboxStore interface {
-	// InsertWithURL(ctx context.Context, tx pgx.Tx, record *URLRecord, outbox *OutboxRecord) error
 	InsertEvent(ctx context.Context, tx pgx.Tx, outbox *OutboxRecord) error
 	FetchUnpublished(ctx context.Context, limit int) ([]*OutboxRecord, error)
 	MarkPublished(ctx context.Context, id string) error
@@ -31,13 +30,6 @@ type pgxOutboxStore struct {
 func NewOutboxStore(pool *pgxpool.Pool) OutboxStore {
 	return &pgxOutboxStore{pool: pool}
 }
-
-// func (s *pgxOutboxStore) InsertWithURL(ctx context.Context, tx pgx.Tx, record *URLRecord, outbox *OutboxRecord) error {
-// 	// WTF?
-// 	const outboxQuery = `INSERT INTO outbox (id, event_type, payload, created_at) VALUES ($1, $2, $3, $4)`
-// 	_, err := tx.Exec(ctx, outboxQuery, outbox.ID, outbox.EventType, outbox.Payload, outbox.CreatedAt)
-// 	return err
-// }
 
 func (s *pgxOutboxStore) InsertEvent(ctx context.Context, tx pgx.Tx, outbox *OutboxRecord) error {
 	const query = `INSERT INTO outbox (id, event_type, payload, created_at) VALUES ($1, $2, $3, $4)`
