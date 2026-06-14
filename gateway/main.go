@@ -10,6 +10,7 @@ import (
 
 	"github.com/ikniz/url-shortener/shared/auth"
 	"github.com/ikniz/url-shortener/shared/logger"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -33,6 +34,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", NewHealthHandler(cfg.ServiceName))
+	mux.Handle("GET /metrics", promhttp.Handler()) // Prometheus scrape endpoint
 	mux.Handle("/", NewHandler(proxy, cfg, authMw))
 
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: mux}
