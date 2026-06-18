@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -19,10 +20,14 @@ func NewProxy(upstreams map[string]string) *Proxy {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request, upstreamName string) {
+	p.ServeHTTPStatus(w, r, upstreamName)
+}
+
+func (p *Proxy) ServeHTTPStatus(w http.ResponseWriter, r *http.Request, upstreamName string) (int, error) {
 	baseURL, ok := p.upstreams[upstreamName]
 	if !ok {
 		http.Error(w, "upstream not found", http.StatusBadGateway)
-		return
+		return http.StatusBadGateway, fmt.Errorf("upstream %q not found", upstreamName)
 	}
 
 	upstreamPath := r.URL.Path
@@ -58,10 +63,29 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request, upstreamName s
 		out.Header.Set("X-Real-IP", host)
 	}
 
-	proxy := &httputil.ReverseProxy{Director: director}
-	proxy.ServeHTTP(w, r)
+	var proxyErr error
+	proxy := &httputil.ReverseProxy{
+		Director: director,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			proxyErr = err
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+		},
+	}
+	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	proxy.ServeHTTP(recorder, r)
+	return recorder.status, proxyErr
 }
 
 func SetUpstreamPath(ctx context.Context, path string) context.Context {
 	return context.WithValue(ctx, upstreamPathKey{}, path)
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
 }

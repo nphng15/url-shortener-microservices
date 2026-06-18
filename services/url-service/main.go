@@ -18,6 +18,9 @@ import (
 var migrationSQL string
 
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	cfg, err := LoadConfig()
 	if err != nil {
 		logger.New("url-service").Error("config error", "error", err)
@@ -62,6 +65,8 @@ func main() {
 
 	urlStore := NewURLStore(pool)
 	outboxStore := NewOutboxStore(pool)
+	publisher := NewAMQPPublisher(rmqConn.Channel)
+	outboxCoordinator := NewOutboxCoordinator(outboxStore, publisher, log)
 	cache := NewRedisCache(redisClient)
 	cgen := NewShortCodeGenerator()
 	handler := NewHTTPHandler(pool, urlStore, outboxStore, cache, cgen, cfg.ShortURLBase)
@@ -98,8 +103,10 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+	go outboxCoordinator.Run(ctx)
 
 	<-quit
+	cancel()
 	log.Info("shutdown signal received, draining connections…")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)

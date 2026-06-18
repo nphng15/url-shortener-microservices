@@ -39,6 +39,7 @@ type CircuitBreaker struct {
 	openTimeout     time.Duration
 	failureWindow   time.Duration
 	windowStart     time.Time
+	halfOpenProbe   bool
 }
 
 func NewCircuitBreaker(maxFailures int, openTimeout, failureWindow time.Duration) *CircuitBreaker {
@@ -61,14 +62,33 @@ func (cb *CircuitBreaker) Do(ctx context.Context, upstream func() error) error {
 			return ErrCircuitOpen
 		}
 	}
+	if cb.state == StateHalfOpen {
+		if cb.halfOpenProbe {
+			cb.mu.Unlock()
+			return ErrCircuitOpen
+		}
+		cb.halfOpenProbe = true
+	}
 
 	cb.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	err := upstream()
 
 	if err != nil {
 		cb.mu.Lock()
 		defer cb.mu.Unlock()
+		cb.halfOpenProbe = false
+
+		if cb.state == StateHalfOpen {
+			cb.state = StateOpen
+			cb.lastFailureTime = time.Now()
+			return err
+		}
 
 		if time.Since(cb.windowStart) > cb.failureWindow {
 			cb.failures = 0
@@ -87,11 +107,13 @@ func (cb *CircuitBreaker) Do(ctx context.Context, upstream func() error) error {
 
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
+	cb.halfOpenProbe = false
 
 	if cb.state == StateHalfOpen {
 		cb.state = StateClosed
-		cb.failures = 0
 	}
+	cb.failures = 0
+	cb.windowStart = time.Now()
 
 	return nil
 }
