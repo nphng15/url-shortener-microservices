@@ -10,7 +10,47 @@ import (
 	"github.com/ikniz/url-shortener/shared/events"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+func TestClickConsumer_ParseMalformedJSONAcks(t *testing.T) {
+	consumer := testClickConsumer()
+	ack := &fakeAcknowledger{}
+	delivery := amqp.Delivery{Acknowledger: ack, DeliveryTag: 1, Body: []byte(`{bad-json`)}
+
+	if _, ok := consumer.parseDelivery(delivery); ok {
+		t.Fatal("parseDelivery ok = true, want false")
+	}
+	if ack.acks != 1 || ack.nacks != 0 {
+		t.Fatalf("acks=%d nacks=%d, want acks=1 nacks=0", ack.acks, ack.nacks)
+	}
+}
+
+func TestClickConsumer_ParseMissingEventIDAcks(t *testing.T) {
+	consumer := testClickConsumer()
+	ack := &fakeAcknowledger{}
+	delivery := amqp.Delivery{Acknowledger: ack, DeliveryTag: 1, Body: []byte(`{"short_code":"abc123"}`)}
+
+	if _, ok := consumer.parseDelivery(delivery); ok {
+		t.Fatal("parseDelivery ok = true, want false")
+	}
+	if ack.acks != 1 || ack.nacks != 0 {
+		t.Fatalf("acks=%d nacks=%d, want acks=1 nacks=0", ack.acks, ack.nacks)
+	}
+}
+
+func TestClickConsumer_ClickRecordUsesEventIPHash(t *testing.T) {
+	evt := &events.URLClickedEvent{ShortCode: "abc123", IPHash: "already-hashed", UserAgent: "agent", Referer: "https://example.com"}
+
+	rec := clickRecordFromEvent(evt)
+
+	if rec.IPHash != "already-hashed" {
+		t.Fatalf("IPHash = %q, want event IPHash", rec.IPHash)
+	}
+	if rec.ShortCode != evt.ShortCode || rec.UserAgent != evt.UserAgent || rec.Referer != evt.Referer {
+		t.Fatalf("unexpected click record: %+v", rec)
+	}
+}
 
 func TestMilestoneChecker_NoMilestoneBelow10(t *testing.T) {
 	checker, tx, milestones, publisher := newTestMilestoneChecker(9)
@@ -171,5 +211,30 @@ func (r fakeRow) Scan(dest ...any) error {
 		return errors.New("fakeRow expects *int64")
 	}
 	*v = r.value
+	return nil
+}
+
+func testClickConsumer() *ClickConsumer {
+	return &ClickConsumer{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+}
+
+type fakeAcknowledger struct {
+	acks    int
+	nacks   int
+	rejects int
+}
+
+func (a *fakeAcknowledger) Ack(tag uint64, multiple bool) error {
+	a.acks++
+	return nil
+}
+
+func (a *fakeAcknowledger) Nack(tag uint64, multiple bool, requeue bool) error {
+	a.nacks++
+	return nil
+}
+
+func (a *fakeAcknowledger) Reject(tag uint64, requeue bool) error {
+	a.rejects++
 	return nil
 }
