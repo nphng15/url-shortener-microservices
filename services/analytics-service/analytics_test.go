@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/ikniz/url-shortener/shared/events"
 	"github.com/jackc/pgx/v5"
@@ -49,6 +53,110 @@ func TestClickConsumer_ClickRecordUsesEventIPHash(t *testing.T) {
 	}
 	if rec.ShortCode != evt.ShortCode || rec.UserAgent != evt.UserAgent || rec.Referer != evt.Referer {
 		t.Fatalf("unexpected click record: %+v", rec)
+	}
+}
+
+func TestStatsHandler_UnknownCodeReturnsZeros(t *testing.T) {
+	store := &fakeClickStore{}
+	handler := NewStatsHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	req := httptest.NewRequest(http.MethodGet, "/stats/missing", nil)
+	req.SetPathValue("code", "missing")
+	rec := httptest.NewRecorder()
+
+	handler.Stats(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var got statsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.ShortCode != "missing" || got.TotalClicks != 0 || got.ClicksLast24h != 0 || got.ClicksLast7d != 0 {
+		t.Fatalf("unexpected stats response: %+v", got)
+	}
+	if got.TopReferers == nil || len(got.TopReferers) != 0 {
+		t.Fatalf("top_referers = %#v, want empty slice", got.TopReferers)
+	}
+}
+
+func TestStatsHandler_TopReferersLimitIsFive(t *testing.T) {
+	store := &fakeClickStore{}
+	handler := NewStatsHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	req := httptest.NewRequest(http.MethodGet, "/stats/abc123", nil)
+	req.SetPathValue("code", "abc123")
+	rec := httptest.NewRecorder()
+
+	handler.Stats(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if store.topReferersLimit != statsTopReferersLimit {
+		t.Fatalf("top referers limit = %d, want %d", store.topReferersLimit, statsTopReferersLimit)
+	}
+}
+
+func TestStatsHandler_StatsDBErrorReturns500(t *testing.T) {
+	store := &fakeClickStore{countErr: errors.New("db down")}
+	handler := NewStatsHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	req := httptest.NewRequest(http.MethodGet, "/stats/abc123", nil)
+	req.SetPathValue("code", "abc123")
+	rec := httptest.NewRecorder()
+
+	handler.Stats(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestStatsHandler_TimeLineInvalidIntervalsReturn400(t *testing.T) {
+	for _, interval := range []string{"week", "month", "", "DAY", "Hour"} {
+		t.Run(interval, func(t *testing.T) {
+			store := &fakeClickStore{}
+			handler := NewStatsHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			req := httptest.NewRequest(http.MethodGet, "/stats/abc123/timeline?interval="+interval, nil)
+			req.SetPathValue("code", "abc123")
+			rec := httptest.NewRecorder()
+
+			handler.TimeLine(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestStatsHandler_TimeLineValidIntervalsReturnEmptyPoints(t *testing.T) {
+	for _, interval := range []string{"day", "hour"} {
+		t.Run(interval, func(t *testing.T) {
+			store := &fakeClickStore{}
+			handler := NewStatsHandler(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			req := httptest.NewRequest(http.MethodGet, "/stats/abc123/timeline?interval="+interval, nil)
+			req.SetPathValue("code", "abc123")
+			rec := httptest.NewRecorder()
+
+			handler.TimeLine(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			var got timeLineResponse
+			if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if got.ShortCode != "abc123" || got.Interval != interval {
+				t.Fatalf("unexpected timeline response: %+v", got)
+			}
+			if got.Points == nil || len(got.Points) != 0 {
+				t.Fatalf("points = %#v, want empty slice", got.Points)
+			}
+			if store.timelineInterval != interval {
+				t.Fatalf("timeline interval = %q, want %q", store.timelineInterval, interval)
+			}
+		})
 	}
 }
 
@@ -142,6 +250,34 @@ func newTestMilestoneChecker(totalClicks int64) (*MilestoneChecker, *fakeTx, *fa
 	publisher := &fakePublisher{}
 	checker := NewMilestoneChecker(nil, milestones, publisher, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return checker, &fakeTx{count: totalClicks}, milestones, publisher
+}
+
+type fakeClickStore struct {
+	countErr         error
+	topReferersLimit int
+	timelineInterval string
+}
+
+func (s *fakeClickStore) Insert(ctx context.Context, tx pgx.Tx, rec *ClickRecord) error {
+	return nil
+}
+
+func (s *fakeClickStore) CountByCode(ctx context.Context, shortCode string) (int64, error) {
+	return 0, s.countErr
+}
+
+func (s *fakeClickStore) CountByCodeSince(ctx context.Context, shortCode string, since time.Time) (int64, error) {
+	return 0, nil
+}
+
+func (s *fakeClickStore) TopReferers(ctx context.Context, shortCode string, n int) ([]RefererCount, error) {
+	s.topReferersLimit = n
+	return nil, nil
+}
+
+func (s *fakeClickStore) TimeLineBuckets(ctx context.Context, shortCode string, truncUnit string) ([]TimeLinePoint, error) {
+	s.timelineInterval = truncUnit
+	return nil, nil
 }
 
 type fakeMilestoneStore struct {
