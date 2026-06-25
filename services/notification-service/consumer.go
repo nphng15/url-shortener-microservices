@@ -141,8 +141,8 @@ func notificationFromMilestoneReached(body []byte) (*NotificationRecord, error) 
 	if err := json.Unmarshal(body, &evt); err != nil {
 		return nil, fmt.Errorf("parse milestone reached event: %w", err)
 	}
-	if evt.UserID == "" {
-		return nil, fmt.Errorf("user_id is required")
+	if evt.UserID == "" || evt.UserEmail == "" {
+		return nil, fmt.Errorf("user_id and user_email are required")
 	}
 	return newNotificationRecord(evt.UserID, evt.UserEmail, evt.EventType, body), nil
 }

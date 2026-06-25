@@ -116,7 +116,7 @@ func (c *ClickConsumer) processDelivery(ctx context.Context, delivery amqp.Deliv
 		nackRequeue(delivery, c.log)
 		return
 	}
-	if err := c.checker.CheckAndPublish(ctx, tx, evt.ShortCode, "", "", evt.CorrelationID); err != nil {
+	if err := c.checker.CheckAndPublish(ctx, tx, evt.ShortCode, evt.UserID, evt.UserEmail, evt.CorrelationID); err != nil {
 		c.log.Error("check click milestone", "event_id", evt.EventID, "short_code", evt.ShortCode, "error", err)
 		nackRequeue(delivery, c.log)
 		return

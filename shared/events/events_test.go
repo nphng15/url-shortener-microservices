@@ -44,6 +44,8 @@ func TestJSONRoundTrip(t *testing.T) {
 		original := URLClickedEvent{
 			BaseEvent: NewBaseEvent(EventTypeURLClicked, corrID),
 			ShortCode: "abcd123",
+			UserID:    "user-1",
+			UserEmail: "user@example.com",
 			IPHash:    "hashed-ip",
 			UserAgent: "Mozilla/5.0",
 			Referer:   "https://google.com",

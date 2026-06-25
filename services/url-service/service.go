@@ -24,6 +24,8 @@ func (e *HTTPError) Error() string {
 
 type RedirectInfo struct {
 	OriginalURL string
+	UserID      string
+	UserEmail   string
 	IpHash      string
 }
 
@@ -100,6 +102,7 @@ func (s *URLService) ShortenURL(ctx context.Context, url, userID, userEmail stri
 				ShortCode:   shortCode,
 				OriginalURL: url,
 				UserID:      userID,
+				UserEmail:   userEmail,
 				CreatedAt:   time.Now(),
 				ExpiresAt:   &expiresAt,
 				IsActive:    true,
@@ -160,6 +163,8 @@ func (s *URLService) ShortenURL(ctx context.Context, url, userID, userEmail stri
 	go func() {
 		cached := &CachedURL{
 			OriginalURL: url,
+			UserID:      userID,
+			UserEmail:   userEmail,
 			ExpiresAt:   &expiresAt,
 			IsActive:    true,
 		}
@@ -197,6 +202,8 @@ func (s *URLService) RedirectToURL(ctx context.Context, shortCode string, remote
 
 		return &RedirectInfo{
 			OriginalURL: cached.OriginalURL,
+			UserID:      cached.UserID,
+			UserEmail:   cached.UserEmail,
 			IpHash:      hashIP(remoteAddr),
 		}, nil
 	}
@@ -242,6 +249,8 @@ func (s *URLService) RedirectToURL(ctx context.Context, shortCode string, remote
 
 		cached := &CachedURL{
 			OriginalURL: urlRecord.OriginalURL,
+			UserID:      urlRecord.UserID,
+			UserEmail:   urlRecord.UserEmail,
 			ExpiresAt:   urlRecord.ExpiresAt,
 			IsActive:    urlRecord.IsActive,
 		}
@@ -250,6 +259,8 @@ func (s *URLService) RedirectToURL(ctx context.Context, shortCode string, remote
 
 	return &RedirectInfo{
 		OriginalURL: urlRecord.OriginalURL,
+		UserID:      urlRecord.UserID,
+		UserEmail:   urlRecord.UserEmail,
 		IpHash:      hashIP(remoteAddr),
 	}, nil
 }

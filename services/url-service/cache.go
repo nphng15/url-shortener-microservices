@@ -13,6 +13,8 @@ import (
 // Storing is_active avoids returning 301 for a deactivated URL cached before deletion.
 type CachedURL struct {
 	OriginalURL string     `json:"original_url"`
+	UserID      string     `json:"user_id"`
+	UserEmail   string     `json:"user_email"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	IsActive    bool       `json:"is_active"`
 }

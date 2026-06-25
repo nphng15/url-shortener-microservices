@@ -15,6 +15,7 @@ type URLRecord struct {
 	ShortCode   string
 	OriginalURL string
 	UserID      string // UUID string
+	UserEmail   string
 	CreatedAt   time.Time
 	ExpiresAt   *time.Time // nil if no expiry
 	IsActive    bool
@@ -36,16 +37,16 @@ func NewURLStore(pool *pgxpool.Pool) URLStore {
 }
 
 func (s *pgxURLStore) Insert(ctx context.Context, tx pgx.Tx, record *URLRecord) error {
-	const query = `INSERT INTO urls (id, short_code, original_url, user_id, created_at, expires_at, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7)`
-	_, err := tx.Exec(ctx, query, record.ID, record.ShortCode, record.OriginalURL, record.UserID, record.CreatedAt, record.ExpiresAt, record.IsActive)
+	const query = `INSERT INTO urls (id, short_code, original_url, user_id, user_email, created_at, expires_at, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	_, err := tx.Exec(ctx, query, record.ID, record.ShortCode, record.OriginalURL, record.UserID, record.UserEmail, record.CreatedAt, record.ExpiresAt, record.IsActive)
 	return err
 }
 
 func (s *pgxURLStore) FindByCode(ctx context.Context, shortCode string) (*URLRecord, error) {
-	const query = `SELECT id, short_code, original_url, user_id, created_at, expires_at, is_active FROM urls
+	const query = `SELECT id, short_code, original_url, user_id, user_email, created_at, expires_at, is_active FROM urls
 	WHERE short_code = $1 AND is_active = true AND (expires_at IS NULL OR expires_at > NOW())`
 	var r URLRecord
-	err := s.pool.QueryRow(ctx, query, shortCode).Scan(&r.ID, &r.ShortCode, &r.OriginalURL, &r.UserID, &r.CreatedAt, &r.ExpiresAt, &r.IsActive)
+	err := s.pool.QueryRow(ctx, query, shortCode).Scan(&r.ID, &r.ShortCode, &r.OriginalURL, &r.UserID, &r.UserEmail, &r.CreatedAt, &r.ExpiresAt, &r.IsActive)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -63,12 +64,12 @@ func (s *pgxURLStore) FindByUserID(ctx context.Context, userID string, afterID s
 	fetchLimit := limit + 1
 
 	if afterID != "" {
-		query = `SELECT id, short_code, original_url, user_id, created_at, expires_at, is_active FROM urls 
+		query = `SELECT id, short_code, original_url, user_id, user_email, created_at, expires_at, is_active FROM urls 
 		WHERE user_id = $1 AND id < $2 AND is_active = true AND (expires_at IS NULL OR expires_at > NOW()) 
 		ORDER BY id DESC LIMIT $3`
 		args = []any{userID, afterID, fetchLimit}
 	} else {
-		query = `SELECT id, short_code, original_url, user_id, created_at, expires_at, is_active FROM urls 
+		query = `SELECT id, short_code, original_url, user_id, user_email, created_at, expires_at, is_active FROM urls 
 		WHERE user_id = $1 AND is_active = true AND (expires_at IS NULL OR expires_at > NOW())
 		ORDER BY id DESC LIMIT $2`
 		args = []any{userID, fetchLimit}
@@ -83,7 +84,7 @@ func (s *pgxURLStore) FindByUserID(ctx context.Context, userID string, afterID s
 	var results []URLRecord
 	for rows.Next() {
 		var r URLRecord
-		if err := rows.Scan(&r.ID, &r.ShortCode, &r.OriginalURL, &r.UserID, &r.CreatedAt, &r.ExpiresAt, &r.IsActive); err != nil {
+		if err := rows.Scan(&r.ID, &r.ShortCode, &r.OriginalURL, &r.UserID, &r.UserEmail, &r.CreatedAt, &r.ExpiresAt, &r.IsActive); err != nil {
 			return nil, err
 		}
 		results = append(results, r)

@@ -48,6 +48,8 @@ type URLCreatedEvent struct {
 type URLClickedEvent struct {
 	BaseEvent
 	ShortCode string    `json:"short_code"`
+	UserID    string    `json:"user_id"`
+	UserEmail string    `json:"user_email"`
 	IPHash    string    `json:"ip_hash"`
 	UserAgent string    `json:"user_agent"`
 	Referer   string    `json:"referer,omitempty"`

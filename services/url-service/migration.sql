@@ -4,10 +4,12 @@ CREATE TABLE IF NOT EXISTS urls (
     short_code   VARCHAR(10)  UNIQUE NOT NULL,
     original_url TEXT         NOT NULL,
     user_id      UUID         NOT NULL,
+    user_email   TEXT         NOT NULL DEFAULT '',
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
     expires_at   TIMESTAMPTZ  NULL,         -- NULL means no expiry
     is_active    BOOLEAN      NOT NULL DEFAULT true
 );
+ALTER TABLE urls ADD COLUMN IF NOT EXISTS user_email TEXT NOT NULL DEFAULT '';
 -- Redirect lookup: short_code → row. UNIQUE implies B-tree index;
 -- explicit name for EXPLAIN ANALYZE verification.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_urls_short_code

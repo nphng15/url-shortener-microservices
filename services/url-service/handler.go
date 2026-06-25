@@ -79,7 +79,7 @@ func (h *HTTPHandler) HandleRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go h.writeAnalyticsEvent(r, shortcode, redirectInfo.IpHash)
+	go h.writeAnalyticsEvent(r, shortcode, redirectInfo.UserID, redirectInfo.UserEmail, redirectInfo.IpHash)
 
 	http.Redirect(w, r, redirectInfo.OriginalURL, http.StatusPermanentRedirect)
 }
@@ -114,7 +114,7 @@ func (h *HTTPHandler) HandleRedirectAnon(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	go h.writeAnalyticsEvent(r, shortcode, redirectInfo.IpHash)
+	go h.writeAnalyticsEvent(r, shortcode, redirectInfo.UserID, redirectInfo.UserEmail, redirectInfo.IpHash)
 
 	http.Redirect(w, r, redirectInfo.OriginalURL, http.StatusPermanentRedirect)
 }
@@ -179,7 +179,7 @@ func (h *HTTPHandler) HandleDeactivateUrl(w http.ResponseWriter, r *http.Request
 
 // --- New Helper Method ---
 
-func (h *HTTPHandler) writeAnalyticsEvent(r *http.Request, shortCode, ipHash string) {
+func (h *HTTPHandler) writeAnalyticsEvent(r *http.Request, shortCode, userID, userEmail, ipHash string) {
 	// Get User-Agent and Referer from request
 	userAgent := r.Header.Get("User-Agent")
 	referrer := r.Header.Get("Referer")
@@ -188,6 +188,8 @@ func (h *HTTPHandler) writeAnalyticsEvent(r *http.Request, shortCode, ipHash str
 	event := events.URLClickedEvent{
 		BaseEvent: events.NewBaseEvent(events.EventTypeURLClicked, ""),
 		ShortCode: shortCode,
+		UserID:    userID,
+		UserEmail: userEmail,
 		IPHash:    ipHash,
 		UserAgent: userAgent,
 		Referer:   referrer,
