@@ -34,7 +34,7 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("RABBITMQ_URL is required")
 	}
 	if cfg.RedisURL == "" {
-		return nil, fmt.Errorf("REDIS_URL is required") // required env var; non-fatal only if *connection* fails
+		return nil, fmt.Errorf("REDIS_URL is required")
 	}
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET is required")

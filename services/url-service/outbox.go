@@ -19,6 +19,8 @@ type OutboxCoordinator struct {
 	log       *slog.Logger
 }
 
+// Coordinates reading unpublished outbox records from storage and
+// publishing them to RabbitMQ, then marking them published.
 func NewOutboxCoordinator(store OutboxStore, publisher RabbitMQPublisher, log *slog.Logger) *OutboxCoordinator {
 	return &OutboxCoordinator{store: store, publisher: publisher, log: log}
 }

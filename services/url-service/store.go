@@ -48,7 +48,7 @@ func (s *pgxURLStore) FindByCode(ctx context.Context, shortCode string) (*URLRec
 	err := s.pool.QueryRow(ctx, query, shortCode).Scan(&r.ID, &r.ShortCode, &r.OriginalURL, &r.UserID, &r.CreatedAt, &r.ExpiresAt, &r.IsActive)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, nil // return nil record when not found
+			return nil, nil
 		}
 		return nil, err
 	}

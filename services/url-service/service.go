@@ -70,8 +70,7 @@ func NewURLService(pool pgxPool, store URLStore, outboxStore OutboxStore, cache 
 }
 
 func (s *URLService) ShortenURL(ctx context.Context, url, userID, userEmail string, expiresInHours int) (ShortenResponse, *HTTPError) {
-	// same logic as handler, but returns *URLRecord and error
-	// 2. Validate URL (from validate.go)
+
 	if err := ValidateURL(url); err != nil {
 		return ShortenResponse{}, &HTTPError{
 			Status: http.StatusBadRequest,
@@ -80,7 +79,7 @@ func (s *URLService) ShortenURL(ctx context.Context, url, userID, userEmail stri
 	}
 
 	// Normalize expires_in
-	if expiresInHours <= 0 || expiresInHours > 24*365 { // reject negative or absurdly long
+	if expiresInHours <= 0 || expiresInHours > 24*365 {
 		expiresInHours = 24 // 1 day default
 	}
 	expiresAt := time.Now().Add(time.Duration(expiresInHours) * time.Hour)
@@ -88,18 +87,16 @@ func (s *URLService) ShortenURL(ctx context.Context, url, userID, userEmail stri
 	var shortCode string
 	var success bool
 
-	// 6. Collision retry (max 3 retries)
 	for attempt := 0; attempt < 3; attempt++ {
-		// 4. Generate short code
 		shortCode = s.cgen.Generate()
 
 		// 5. BEGIN tx -> Insert URL + Insert outbox -> COMMIT
 		// pgx.BeginFunc automatically handles Rollback on error and Commit on success
 		err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 
-			// 5a) INSERT URL
+			// INSERT URL
 			ur := &URLRecord{
-				ID:          uuid.NewString(), // postgres uses standard UUID format
+				ID:          uuid.NewString(),
 				ShortCode:   shortCode,
 				OriginalURL: url,
 				UserID:      userID,
@@ -111,9 +108,9 @@ func (s *URLService) ShortenURL(ctx context.Context, url, userID, userEmail stri
 				return err
 			}
 
-			// 5b) INSERT OUTBOX (Same transaction) using shared events
+			// INSERT OUTBOX
 			event := events.URLCreatedEvent{
-				BaseEvent:   events.NewBaseEvent(events.EventTypeURLCreated, ""), // no correlation ID passed for now
+				BaseEvent:   events.NewBaseEvent(events.EventTypeURLCreated, ""),
 				ShortCode:   shortCode,
 				OriginalURL: url,
 				UserID:      userID,
@@ -132,12 +129,12 @@ func (s *URLService) ShortenURL(ctx context.Context, url, userID, userEmail stri
 				return err
 			}
 
-			return nil // Commits!
+			return nil
 		})
 
 		if err == nil {
 			success = true
-			break // Successfully inserted both, exit retry loop
+			break
 		}
 
 		// If error is a unique constraint violation (collision)
@@ -147,7 +144,6 @@ func (s *URLService) ShortenURL(ctx context.Context, url, userID, userEmail stri
 			continue
 		}
 
-		// For any other database error, exit immediately
 		return ShortenResponse{}, &HTTPError{
 			Status: http.StatusInternalServerError,
 			Err:    ErrDatabaseError,
@@ -186,9 +182,6 @@ func (s *URLService) RedirectToURL(ctx context.Context, shortCode string, remote
 
 	cached, err := s.cache.Get(ctx, shortCode)
 	if err == nil && cached != nil {
-		// Cache HIT
-
-		// Validate cached entry
 		if !cached.IsActive {
 			return nil, &HTTPError{
 				Status: http.StatusGone,
@@ -224,7 +217,6 @@ func (s *URLService) RedirectToURL(ctx context.Context, shortCode string, remote
 		}
 	}
 
-	// Validate DB record
 	if !urlRecord.IsActive {
 		return nil, &HTTPError{
 			Status: http.StatusGone,
@@ -338,9 +330,9 @@ func (s *URLService) DeactivateURL(ctx context.Context, shortCode, userID, userE
 		}
 	}
 
-	// 3. Redis Delete (invalidate cache immediately after successful commit)
+	// Redis Delete
 	_ = s.cache.Delete(context.Background(), shortCode)
 
-	// 4. Return 204 No Content
+	// Return 204 No Content
 	return nil
 }

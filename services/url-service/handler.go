@@ -54,7 +54,6 @@ func (h *HTTPHandler) HandleShorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Parse JSON body
 	var req ShortenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -67,7 +66,6 @@ func (h *HTTPHandler) HandleShorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 7. Return 201 Created
 	writeJSON(w, http.StatusCreated, urlRecord)
 }
 
@@ -92,7 +90,6 @@ func (h *HTTPHandler) HandleRedirect(w http.ResponseWriter, r *http.Request) {
 
 func (h *HTTPHandler) HandleShortenAnon(w http.ResponseWriter, r *http.Request) {
 
-	// 1. Parse JSON body
 	var req ShortenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -105,7 +102,6 @@ func (h *HTTPHandler) HandleShortenAnon(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// 7. Return 201 Created
 	writeJSON(w, http.StatusCreated, urlRecord)
 }
 
@@ -215,8 +211,5 @@ func (h *HTTPHandler) writeAnalyticsEvent(r *http.Request, shortCode, ipHash str
 		CreatedAt: time.Now(),
 	}
 
-	// We can ignore the error here - this is an analytics event,
-	// the system should still function if analytics DB is down.
-	// But for robustness, we could log it.
 	_ = h.outboxStore.InsertEvent(context.Background(), nil, outbox)
 }
