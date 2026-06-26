@@ -6,7 +6,7 @@ EMAIL="thong-e2e-$(date +%s)@example.com"
 PASSWORD="Password123!"
 
 json_get() {
-  python3 -c 'import json,sys; data=json.load(sys.stdin); print(data'"$1"')'
+  py -c 'import json,sys; data=json.load(sys.stdin); print(data'"$1"')'
 }
 
 request() {
@@ -61,7 +61,7 @@ sleep 5
 
 echo "6. stats"
 request GET "/api/stats/${SHORT_CODE}" >/tmp/url-shortener-stats.json
-python3 - <<'PY'
+py - <<'PY'
 import json
 with open('/tmp/url-shortener-stats.json') as f:
     data = json.load(f)
@@ -71,7 +71,7 @@ PY
 
 echo "7. notifications"
 request GET /api/notifications "" "$TOKEN" >/tmp/url-shortener-notifications.json
-python3 - <<'PY'
+py - <<'PY'
 import json
 with open('/tmp/url-shortener-notifications.json') as f:
     data = json.load(f)

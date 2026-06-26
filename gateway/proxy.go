@@ -7,20 +7,40 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"time"
 )
 
 type upstreamPathKey struct{}
 
+// Proxy holds a reverse proxy and one CircuitBreaker per upstream service.
 type Proxy struct {
 	upstreams map[string]string
+	cbs       map[string]*CircuitBreaker
 }
 
+// NewProxy creates a Proxy with a dedicated CircuitBreaker for every upstream.
+// CB settings: trip after 5 failures in a 10-second window; stay OPEN for 30 s.
 func NewProxy(upstreams map[string]string) *Proxy {
-	return &Proxy{upstreams: upstreams}
+	cbs := make(map[string]*CircuitBreaker, len(upstreams))
+	for name := range upstreams {
+		svcName := name // capture for closure
+		cb := NewCircuitBreaker(5, 30*time.Second, 10*time.Second)
+		cb.WithStateChange(func(from, to State) {
+			// Update Prometheus gauge whenever state changes.
+			recordCBState(svcName, to)
+			if to == StateOpen {
+				recordCBTrip(svcName)
+			}
+		})
+		// Initialise gauge to CLOSED.
+		recordCBState(svcName, StateClosed)
+		cbs[name] = cb
+	}
+	return &Proxy{upstreams: upstreams, cbs: cbs}
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request, upstreamName string) {
-	p.ServeHTTPStatus(w, r, upstreamName)
+	_, _ = p.ServeHTTPStatus(w, r, upstreamName)
 }
 
 func (p *Proxy) ServeHTTPStatus(w http.ResponseWriter, r *http.Request, upstreamName string) (int, error) {
@@ -30,6 +50,57 @@ func (p *Proxy) ServeHTTPStatus(w http.ResponseWriter, r *http.Request, upstream
 		return http.StatusBadGateway, fmt.Errorf("upstream %q not found", upstreamName)
 	}
 
+	cb, hasCB := p.cbs[upstreamName]
+	if !hasCB {
+		rec := newStatusRecorder(w)
+		status, err := p.doProxy(rec, r, baseURL)
+		if err != nil {
+			return status, err
+		}
+		return status, nil
+	}
+
+	start := time.Now()
+	ctx := r.Context()
+
+	err := cb.Do(ctx, func() error {
+		// Use a custom ResponseWriter to capture the status code.
+		rec := newStatusRecorder(w)
+		status, proxyErr := p.doProxy(rec, r, baseURL)
+		if proxyErr != nil {
+			return proxyErr
+		}
+
+		elapsed := time.Since(start).Seconds()
+		requestDuration.WithLabelValues(upstreamName).Observe(elapsed)
+
+		// Treat 5xx as upstream errors so the CB counts them.
+		if status >= 500 {
+			class := fmt.Sprintf("%dxx", status/100)
+			requestsTotal.WithLabelValues(upstreamName, class).Inc()
+			return fmt.Errorf("upstream %s returned %d", upstreamName, status)
+		}
+
+		class := fmt.Sprintf("%dxx", status/100)
+		requestsTotal.WithLabelValues(upstreamName, class).Inc()
+		return nil
+	})
+
+	if err == ErrCircuitOpen {
+		recordCBRejected(upstreamName)
+		requestsTotal.WithLabelValues(upstreamName, "circuit_open").Inc()
+		http.Error(w, "service temporarily unavailable (circuit open)", http.StatusServiceUnavailable)
+		return http.StatusServiceUnavailable, err
+	}
+	if err != nil {
+		return http.StatusBadGateway, err
+	}
+	// Other errors: response was already written by doProxy.
+	return http.StatusOK, nil
+}
+
+// doProxy performs the actual reverse-proxy hop.
+func (p *Proxy) doProxy(w http.ResponseWriter, r *http.Request, baseURL string) (int, error) {
 	upstreamPath := r.URL.Path
 	if v := r.Context().Value(upstreamPathKey{}); v != nil {
 		if s, ok := v.(string); ok {
@@ -40,7 +111,6 @@ func (p *Proxy) ServeHTTPStatus(w http.ResponseWriter, r *http.Request, upstream
 	director := func(out *http.Request) {
 		parsed, err := url.Parse(baseURL)
 		if err != nil || parsed.Host == "" {
-			// Treat baseURL as a plain host:port if it has no scheme
 			out.URL.Scheme = "http"
 			out.URL.Host = baseURL
 		} else {
@@ -76,16 +146,22 @@ func (p *Proxy) ServeHTTPStatus(w http.ResponseWriter, r *http.Request, upstream
 	return recorder.status, proxyErr
 }
 
+// SetUpstreamPath stores a rewritten path into the context.
 func SetUpstreamPath(ctx context.Context, path string) context.Context {
 	return context.WithValue(ctx, upstreamPathKey{}, path)
 }
 
+// statusRecorder wraps http.ResponseWriter to capture the written status code.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
 }
 
-func (r *statusRecorder) WriteHeader(status int) {
-	r.status = status
-	r.ResponseWriter.WriteHeader(status)
+func newStatusRecorder(w http.ResponseWriter) *statusRecorder {
+	return &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+}
+
+func (sr *statusRecorder) WriteHeader(code int) {
+	sr.status = code
+	sr.ResponseWriter.WriteHeader(code)
 }

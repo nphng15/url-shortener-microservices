@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ikniz/url-shortener/shared/logger"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -44,6 +45,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", NewHealthHandler(cfg.ServiceName))
+	mux.Handle("GET /metrics", promhttp.Handler()) // Prometheus scrape endpoint
 	mux.Handle("/", jwtMiddleware(cfg.JWTSecret, handler))
 
 	app := logger.RequestLogger(log, correlationIDMiddleware(mux))

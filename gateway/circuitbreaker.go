@@ -39,7 +39,10 @@ type CircuitBreaker struct {
 	openTimeout     time.Duration
 	failureWindow   time.Duration
 	windowStart     time.Time
-	halfOpenProbe   bool
+
+	// onStateChange is called (without the lock held) whenever state transitions.
+	onStateChange func(from, to State)
+	halfOpenProbe bool
 }
 
 func NewCircuitBreaker(maxFailures int, openTimeout, failureWindow time.Duration) *CircuitBreaker {
@@ -51,28 +54,60 @@ func NewCircuitBreaker(maxFailures int, openTimeout, failureWindow time.Duration
 	}
 }
 
-func (cb *CircuitBreaker) Do(ctx context.Context, upstream func() error) error {
+// WithStateChange attaches a callback that is invoked on every state transition.
+func (cb *CircuitBreaker) WithStateChange(fn func(from, to State)) *CircuitBreaker {
 	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.onStateChange = fn
+	return cb
+}
 
-	if cb.state == StateOpen {
-		if time.Since(cb.lastFailureTime) > cb.openTimeout {
-			cb.state = StateHalfOpen
-		} else {
+// notifyStateChange calls the registered callback outside the lock.
+// Must be called after releasing the lock.
+func (cb *CircuitBreaker) notifyStateChange(from, to State) {
+	if cb.onStateChange != nil {
+		cb.onStateChange(from, to)
+	}
+}
+
+func (cb *CircuitBreaker) Do(ctx context.Context, upstream func() error) error { //nolint:unparam
+	cb.mu.Lock()
+	stateChanged := false
+	previousState := State(-1)
+	newState := State(-1)
+
+	switch cb.state {
+	case StateOpen:
+		if time.Since(cb.lastFailureTime) <= cb.openTimeout {
 			cb.mu.Unlock()
 			return ErrCircuitOpen
 		}
-	}
-	if cb.state == StateHalfOpen {
+		previousState = cb.state
+		cb.state = StateHalfOpen
+		cb.halfOpenProbe = true
+		stateChanged = true
+		newState = StateHalfOpen
+	case StateHalfOpen:
 		if cb.halfOpenProbe {
 			cb.mu.Unlock()
 			return ErrCircuitOpen
 		}
 		cb.halfOpenProbe = true
+	default:
+	}
+	cb.mu.Unlock()
+
+	if stateChanged {
+		cb.notifyStateChange(previousState, newState)
 	}
 
-	cb.mu.Unlock()
 	select {
 	case <-ctx.Done():
+		cb.mu.Lock()
+		if cb.state == StateHalfOpen {
+			cb.halfOpenProbe = false
+		}
+		cb.mu.Unlock()
 		return ctx.Err()
 	default:
 	}
@@ -81,15 +116,17 @@ func (cb *CircuitBreaker) Do(ctx context.Context, upstream func() error) error {
 
 	if err != nil {
 		cb.mu.Lock()
-		defer cb.mu.Unlock()
-		cb.halfOpenProbe = false
-
 		if cb.state == StateHalfOpen {
+			cb.halfOpenProbe = false
+			previousState = cb.state
 			cb.state = StateOpen
 			cb.lastFailureTime = time.Now()
+			cb.mu.Unlock()
+			cb.notifyStateChange(previousState, StateOpen)
 			return err
 		}
 
+		cb.halfOpenProbe = false
 		if time.Since(cb.windowStart) > cb.failureWindow {
 			cb.failures = 0
 			cb.windowStart = time.Now()
@@ -98,23 +135,34 @@ func (cb *CircuitBreaker) Do(ctx context.Context, upstream func() error) error {
 		cb.failures++
 		cb.lastFailureTime = time.Now()
 
-		if cb.failures >= cb.maxFailures {
+		if cb.failures >= cb.maxFailures && cb.state != StateOpen {
+			previousState = cb.state
 			cb.state = StateOpen
+			cb.mu.Unlock()
+			cb.notifyStateChange(previousState, StateOpen)
+			return err
 		}
 
+		cb.mu.Unlock()
 		return err
 	}
 
 	cb.mu.Lock()
-	defer cb.mu.Unlock()
-	cb.halfOpenProbe = false
-
 	if cb.state == StateHalfOpen {
+		previousState = cb.state
 		cb.state = StateClosed
+		cb.halfOpenProbe = false
+		cb.failures = 0
+		cb.windowStart = time.Now()
+		cb.mu.Unlock()
+		cb.notifyStateChange(previousState, StateClosed)
+		return nil
 	}
+
+	cb.halfOpenProbe = false
 	cb.failures = 0
 	cb.windowStart = time.Now()
-
+	cb.mu.Unlock()
 	return nil
 }
 
