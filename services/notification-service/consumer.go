@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,12 @@ import (
 
 	"github.com/ikniz/url-shortener/shared/events"
 	amqp "github.com/rabbitmq/amqp091-go"
+)
+
+var (
+	errMissingEventID                = errors.New("event_id is required")
+	errMissingUserEmail              = errors.New("user_email is required")
+	errDiscardMilestoneMissingUserID = errors.New("discard milestone.reached: user_id is required")
 )
 
 type NotificationConsumer struct {
@@ -77,44 +84,47 @@ func (c *NotificationConsumer) processDelivery(ctx context.Context, delivery amq
 }
 
 func (c *NotificationConsumer) notificationFromDelivery(delivery amqp.Delivery) (*NotificationRecord, string, bool) {
-	eventType, eventID, err := parseBaseEvent(delivery.Body)
+	eventID, err := parseEventID(delivery.Body)
 	if err != nil {
-		c.log.Warn("invalid notification event", "body", truncate(string(delivery.Body), 200), "error", err)
+		c.log.Warn("invalid notification event", "body", truncate(string(delivery.Body), 200), "routing_key", delivery.RoutingKey, "error", err)
 		ack(delivery, c.log)
 		return nil, "", false
 	}
 
+	eventType := delivery.RoutingKey
 	var rec *NotificationRecord
 	switch eventType {
 	case string(events.EventTypeURLCreated):
-		rec, err = notificationFromURLCreated(delivery.Body)
+		rec, err = notificationFromURLCreated(delivery.Body, eventType)
 	case string(events.EventTypeURLDeleted):
-		rec, err = notificationFromURLDeleted(delivery.Body)
+		rec, err = notificationFromURLDeleted(delivery.Body, eventType)
 	case string(events.EventTypeMilestoneReached):
-		rec, err = notificationFromMilestoneReached(delivery.Body)
+		rec, err = notificationFromMilestoneReached(delivery.Body, eventType)
 	default:
-		err = fmt.Errorf("unsupported event type %q", eventType)
+		c.log.Warn("unsupported notification routing key discarded", "event_id", eventID, "routing_key", eventType)
+		ack(delivery, c.log)
+		return nil, eventID, false
 	}
 	if err != nil {
-		c.log.Warn("invalid notification payload", "event_id", eventID, "event_type", eventType, "error", err)
+		c.log.Warn("invalid notification payload", "event_id", eventID, "routing_key", eventType, "error", err)
 		ack(delivery, c.log)
 		return nil, eventID, false
 	}
 	return rec, eventID, true
 }
 
-func parseBaseEvent(body []byte) (string, string, error) {
+func parseEventID(body []byte) (string, error) {
 	var base events.BaseEvent
 	if err := json.Unmarshal(body, &base); err != nil {
-		return "", "", fmt.Errorf("parse base event: %w", err)
+		return "", err
 	}
-	if base.EventID == "" || base.EventType == "" {
-		return "", "", fmt.Errorf("event_id and event_type are required")
+	if base.EventID == "" {
+		return "", errMissingEventID
 	}
-	return base.EventType, base.EventID, nil
+	return base.EventID, nil
 }
 
-func notificationFromURLCreated(body []byte) (*NotificationRecord, error) {
+func notificationFromURLCreated(body []byte, eventType string) (*NotificationRecord, error) {
 	var evt events.URLCreatedEvent
 	if err := json.Unmarshal(body, &evt); err != nil {
 		return nil, fmt.Errorf("parse url created event: %w", err)
@@ -122,10 +132,10 @@ func notificationFromURLCreated(body []byte) (*NotificationRecord, error) {
 	if evt.UserID == "" || evt.UserEmail == "" {
 		return nil, fmt.Errorf("user_id and user_email are required")
 	}
-	return newNotificationRecord(evt.UserID, evt.UserEmail, evt.EventType, body), nil
+	return newNotificationRecord(evt.UserID, evt.UserEmail, eventType, body), nil
 }
 
-func notificationFromURLDeleted(body []byte) (*NotificationRecord, error) {
+func notificationFromURLDeleted(body []byte, eventType string) (*NotificationRecord, error) {
 	var evt events.URLDeletedEvent
 	if err := json.Unmarshal(body, &evt); err != nil {
 		return nil, fmt.Errorf("parse url deleted event: %w", err)
@@ -133,18 +143,21 @@ func notificationFromURLDeleted(body []byte) (*NotificationRecord, error) {
 	if evt.UserID == "" || evt.UserEmail == "" {
 		return nil, fmt.Errorf("user_id and user_email are required")
 	}
-	return newNotificationRecord(evt.UserID, evt.UserEmail, evt.EventType, body), nil
+	return newNotificationRecord(evt.UserID, evt.UserEmail, eventType, body), nil
 }
 
-func notificationFromMilestoneReached(body []byte) (*NotificationRecord, error) {
+func notificationFromMilestoneReached(body []byte, eventType string) (*NotificationRecord, error) {
 	var evt events.MilestoneReachedEvent
 	if err := json.Unmarshal(body, &evt); err != nil {
 		return nil, fmt.Errorf("parse milestone reached event: %w", err)
 	}
-	if evt.UserID == "" || evt.UserEmail == "" {
-		return nil, fmt.Errorf("user_id and user_email are required")
+	if evt.UserID == "" {
+		return nil, errDiscardMilestoneMissingUserID
 	}
-	return newNotificationRecord(evt.UserID, evt.UserEmail, evt.EventType, body), nil
+	if evt.UserEmail == "" {
+		return nil, errMissingUserEmail
+	}
+	return newNotificationRecord(evt.UserID, evt.UserEmail, eventType, body), nil
 }
 
 func newNotificationRecord(userID, userEmail, eventType string, body []byte) *NotificationRecord {

@@ -39,3 +39,4 @@ vendor/
 # Docker local data mapping
 data/
 db_data/
+services/*-service/*-service

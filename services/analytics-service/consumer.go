@@ -21,11 +21,10 @@ type ClickConsumer struct {
 	dedupStore     DeduplicationRepository
 	checker        *MilestoneChecker
 	log            *slog.Logger
-	salt           string
 	healthy        atomic.Bool
 }
 
-func NewClickConsumer(conn *RabbitMQConn, pool *pgxpool.Pool, clickStore ClickRepository, milestoneStore MilestoneRepository, dedupStore DeduplicationRepository, checker *MilestoneChecker, log *slog.Logger, salt string) *ClickConsumer {
+func NewClickConsumer(conn *RabbitMQConn, pool *pgxpool.Pool, clickStore ClickRepository, milestoneStore MilestoneRepository, dedupStore DeduplicationRepository, checker *MilestoneChecker, log *slog.Logger) *ClickConsumer {
 	return &ClickConsumer{
 		conn:           conn,
 		pool:           pool,
@@ -34,7 +33,6 @@ func NewClickConsumer(conn *RabbitMQConn, pool *pgxpool.Pool, clickStore ClickRe
 		dedupStore:     dedupStore,
 		checker:        checker,
 		log:            log,
-		salt:           salt,
 	}
 }
 

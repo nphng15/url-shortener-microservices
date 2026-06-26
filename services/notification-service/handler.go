@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/google/uuid"
 	"github.com/ikniz/url-shortener/shared/auth"
 )
 
@@ -13,7 +14,10 @@ const (
 	maxNotificationLimit     = 100
 )
 
-var errInvalidLimit = errors.New("limit must be a positive integer")
+var (
+	errInvalidLimit  = errors.New("limit must be a positive integer")
+	errInvalidCursor = errors.New("after must be a valid uuid")
+)
 
 type notificationListResponse struct {
 	Notifications []Notification `json:"notifications"`
@@ -40,7 +44,11 @@ func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	afterID := r.URL.Query().Get("after")
+	afterID, err := parseNotificationCursor(r.URL.Query().Get("after"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	notifications, nextCursor, err := h.store.ListByUser(r.Context(), claims.Sub, afterID, limit)
 	if err != nil {
@@ -69,6 +77,16 @@ func parseNotificationLimit(raw string) (int, error) {
 		return maxNotificationLimit, nil
 	}
 	return limit, nil
+}
+
+func parseNotificationCursor(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	if _, err := uuid.Parse(raw); err != nil {
+		return "", errInvalidCursor
+	}
+	return raw, nil
 }
 
 func nullableCursor(cursor string) *string {

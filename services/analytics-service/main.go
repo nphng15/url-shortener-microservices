@@ -43,7 +43,7 @@ func main() {
 	dedupStore := NewDeduplicationStore()
 	publisher := NewAnalyticsPublisher(mqConn.Channel, log)
 	checker := NewMilestoneChecker(clickStore, milestoneStore, publisher, log)
-	consumer := NewClickConsumer(mqConn, pool, clickStore, milestoneStore, dedupStore, checker, log, cfg.IPHashSalt)
+	consumer := NewClickConsumer(mqConn, pool, clickStore, milestoneStore, dedupStore, checker, log)
 	statsHandler := NewStatsHandler(clickStore, log)
 
 	mux := http.NewServeMux()
