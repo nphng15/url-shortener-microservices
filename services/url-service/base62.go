@@ -1,6 +1,10 @@
 package main
 
-import "math/big"
+import (
+	"errors"
+	"math/big"
+	"strings"
+)
 
 const base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 const shortCodeLength = 7
@@ -40,4 +44,26 @@ func Encode(n *big.Int) string {
 	}
 
 	return string(buf)
+}
+
+// Decode converts a base62 string of exactly shortCodeLength characters back to a big.Int.
+// Returns an error if the string length is not shortCodeLength or if it contains invalid characters.
+func Decode(s string) (*big.Int, error) {
+	if len(s) != shortCodeLength {
+		return nil, errors.New("invalid short code length")
+	}
+
+	result := big.NewInt(0)
+	base := big.NewInt(62)
+
+	for i := 0; i < len(s); i++ {
+		idx := strings.IndexByte(base62Alphabet, s[i])
+		if idx == -1 {
+			return nil, errors.New("invalid character in short code")
+		}
+		result.Mul(result, base)
+		result.Add(result, big.NewInt(int64(idx)))
+	}
+
+	return result, nil
 }

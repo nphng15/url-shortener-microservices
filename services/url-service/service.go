@@ -11,7 +11,6 @@ import (
 	"github.com/ikniz/url-shortener/shared/events"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type HTTPError struct {
@@ -46,8 +45,12 @@ type ListURLsResponse struct {
 	HasMore    bool        `json:"has_more"`
 }
 
+type pgxPool interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 type URLService struct {
-	pool         *pgxpool.Pool // Required to start database transactions
+	pool         pgxPool // Required to start database transactions
 	store        URLStore
 	outboxStore  OutboxStore
 	cache        Cache
@@ -55,7 +58,7 @@ type URLService struct {
 	shortURLBase string
 }
 
-func NewURLService(pool *pgxpool.Pool, store URLStore, outboxStore OutboxStore, cache Cache, cgen ShortCodeGenerator, shortURLBase string) *URLService {
+func NewURLService(pool pgxPool, store URLStore, outboxStore OutboxStore, cache Cache, cgen ShortCodeGenerator, shortURLBase string) *URLService {
 	return &URLService{
 		pool:         pool,
 		store:        store,

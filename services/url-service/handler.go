@@ -11,11 +11,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/ikniz/url-shortener/shared/auth"
 	"github.com/ikniz/url-shortener/shared/events"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type HTTPHandler struct {
-	pool         *pgxpool.Pool // Required to start database transactions
+	pool         pgxPool // Required to start database transactions
 	store        URLStore
 	outboxStore  OutboxStore // Required for the outbox
 	cache        Cache
@@ -25,7 +24,7 @@ type HTTPHandler struct {
 	urlService *URLService
 }
 
-func NewHTTPHandler(pool *pgxpool.Pool, store URLStore, outboxStore OutboxStore, cache Cache, codegen ShortCodeGenerator, shortURLBase string) *HTTPHandler {
+func NewHTTPHandler(pool pgxPool, store URLStore, outboxStore OutboxStore, cache Cache, codegen ShortCodeGenerator, shortURLBase string) *HTTPHandler {
 	return &HTTPHandler{
 		pool:         pool,
 		store:        store,

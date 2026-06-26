@@ -114,7 +114,7 @@ Check: `docker compose up --build`, url-service healthy, /health -> 200
     - Đăng ký routes: POST /shorten (auth), GET /{code} (no auth), GET /urls (auth), DELETE /urls/{code} (auth)
     - Start outbox coordinator (Thống làm outbox, bạn chỉ gọi NewOutboxCoordinator(...) trong main.go)
 
-[ ] url_test.go:
+[X] url_test.go:
     - base62: encode/decode round-trip
     - codegen: output là 7 chars, chỉ chứa base62 chars, 2 calls khác nhau
     - handler: mock store + cache, test shorten/redirect/list/delete
@@ -144,8 +144,8 @@ Check M3:
 ## Tuần 3
 
 ```
-[ ] Chạy e2e_test.sh, fix url-service bugs
-[ ] Full flow test: shorten -> redirect (15 lần) -> check stats -> check milestone
+[X] Chạy e2e_test.sh, fix url-service bugs
+[X] Full flow test: shorten -> redirect (15 lần) -> check stats -> check milestone
 [ ] Cold restart: docker compose down && up -> url-service healthy
 [ ] Code cleanup, comments, demo rehearsal
 ```
