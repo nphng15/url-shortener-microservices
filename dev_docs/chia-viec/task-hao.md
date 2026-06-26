@@ -9,6 +9,7 @@
 ## Tuần 1
 
 ### Ngày 1-2: M1 — url-service scaffold
+
 ```
 [X] config.go — loadConfig từ env vars (DATABASE_URL, REDIS_URL, RABBITMQ_URL, JWT_SECRET, SHORT_URL_BASE, IP_HASH_SALT, PORT)
 [X] db.go — NewDBPool (pgxpool, MaxConns=10, MinConns=2, ping 10s timeout, fatal khi fail)
@@ -22,6 +23,7 @@
 Check: `docker compose up --build`, url-service healthy, /health -> 200
 
 ### Ngày 3-5: Bắt đầu M3 sớm
+
 ```
 [X] migration.sql:
     - urls table: id UUID PK, short_code VARCHAR(10) UNIQUE NOT NULL, original_url TEXT NOT NULL,
@@ -51,9 +53,10 @@ Check: `docker compose up --build`, url-service healthy, /health -> 200
 ```
 
 ### Ngày 6-7: M3 handler + outbox_store
+
 ```
 [X] outbox_store.go (pgxOutboxStore):
-    - InsertWithURL(ctx, tx, url, outbox) error — TRONG CÙNG TRANSACTION với URL insert 
+    - InsertWithURL(ctx, tx, url, outbox) error — TRONG CÙNG TRANSACTION với URL insert
     ^ Cái này không chắc lắm. Tại Handler sẽ gọi store insert URL, sau đó lại gọi outbox store insert event.?
     Check lại!
     - InsertEvent(ctx, tx, outbox) error — cho DELETE (outbox event trong cùng tx với deactivate)
@@ -99,11 +102,12 @@ Check: `docker compose up --build`, url-service healthy, /health -> 200
 ## Tuần 2
 
 ### Ngày 8-10: Hoàn thành M3
+
 ```
 [X] errors.go — sentinel errors (ErrNotFound, ErrAlreadyExists, ErrForbidden, ErrExpired, ErrDeactivated)
     writeError(w, status, message) + writeJSON(w, status, data) helpers
 
-[-X] Mở rộng main.go — full wiring:
+[X] Mở rộng main.go — full wiring:
     - runMigrations(ctx, pool)
     - Khởi tạo stores, cache, codegen, handler
     - Wire JWT middleware từ shared/auth
@@ -120,6 +124,7 @@ Check: `docker compose up --build`, url-service healthy, /health -> 200
 ```
 
 Check M3:
+
 - POST /shorten -> 201, short code trong DB, outbox row được tạo
 - GET /{code} -> 301 (lần 1 từ DB, lần 2 từ Redis)
 - DELETE -> 204, sau đó GET -> 410
@@ -127,6 +132,7 @@ Check M3:
 - EXPLAIN ANALYZE trên urls table -> index scan
 
 ### Ngày 11-14: Hỗ trợ
+
 ```
 [ ] Optimize url-service: EXPLAIN ANALYZE, Redis cache hit rate
 [ ] Fix bugs từ integration testing
