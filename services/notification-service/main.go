@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	startupTimeout   = 60 * time.Second
-	shutdownTimeout  = 10 * time.Second
-	rabbitMQAttempts = 10
+	databaseStartupTimeout = 60 * time.Second
+	rabbitMQStartupTimeout = 120 * time.Second
+	shutdownTimeout        = 10 * time.Second
+	rabbitMQAttempts       = 10
 )
 
 func main() {
@@ -64,7 +65,7 @@ func main() {
 }
 
 func connectDatabase(cfg *Config, log *slog.Logger) *pgxpool.Pool {
-	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), databaseStartupTimeout)
 	defer cancel()
 
 	pool, err := NewDBPool(ctx, cfg.DatabaseURL, log)
@@ -81,7 +82,7 @@ func connectDatabase(cfg *Config, log *slog.Logger) *pgxpool.Pool {
 }
 
 func connectRabbitMQ(cfg *Config, log *slog.Logger) *RabbitMQConn {
-	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), rabbitMQStartupTimeout)
 	defer cancel()
 
 	mqConn, err := NewRabbitMQConn(ctx, cfg.RabbitMQURL, log, rabbitMQAttempts)

@@ -44,7 +44,7 @@ func (s *pgxURLStore) Insert(ctx context.Context, tx pgx.Tx, record *URLRecord) 
 
 func (s *pgxURLStore) FindByCode(ctx context.Context, shortCode string) (*URLRecord, error) {
 	const query = `SELECT id, short_code, original_url, user_id, user_email, created_at, expires_at, is_active FROM urls
-	WHERE short_code = $1 AND is_active = true AND (expires_at IS NULL OR expires_at > NOW())`
+	WHERE short_code = $1`
 	var r URLRecord
 	err := s.pool.QueryRow(ctx, query, shortCode).Scan(&r.ID, &r.ShortCode, &r.OriginalURL, &r.UserID, &r.UserEmail, &r.CreatedAt, &r.ExpiresAt, &r.IsActive)
 	if err != nil {
