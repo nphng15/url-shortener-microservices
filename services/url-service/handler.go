@@ -14,9 +14,9 @@ import (
 )
 
 type HTTPHandler struct {
-	pool         pgxPool // Required to start database transactions
+	pool         pgxPool
 	store        URLStore
-	outboxStore  OutboxStore // Required for the outbox
+	outboxStore  OutboxStore
 	cache        Cache
 	codegen      ShortCodeGenerator
 	shortURLBase string
@@ -37,10 +37,7 @@ func NewHTTPHandler(pool pgxPool, store URLStore, outboxStore OutboxStore, cache
 	}
 }
 
-// --- The Handler ---
-
 func (h *HTTPHandler) HandleShorten(w http.ResponseWriter, r *http.Request) {
-	// Extract user claims injected by JWTMiddleware
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "user not authenticated")
@@ -84,7 +81,6 @@ func (h *HTTPHandler) HandleRedirect(w http.ResponseWriter, r *http.Request) {
 
 	go h.writeAnalyticsEvent(r, shortcode, redirectInfo.IpHash)
 
-	// Redirect
 	http.Redirect(w, r, redirectInfo.OriginalURL, http.StatusPermanentRedirect)
 }
 
@@ -120,12 +116,10 @@ func (h *HTTPHandler) HandleRedirectAnon(w http.ResponseWriter, r *http.Request)
 
 	go h.writeAnalyticsEvent(r, shortcode, redirectInfo.IpHash)
 
-	// Redirect
 	http.Redirect(w, r, redirectInfo.OriginalURL, http.StatusPermanentRedirect)
 }
 
 func (h *HTTPHandler) HandleGetUrls(w http.ResponseWriter, r *http.Request) {
-	// JWT required, extract user_id
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "user not authenticated")
@@ -133,7 +127,6 @@ func (h *HTTPHandler) HandleGetUrls(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := claims.Sub
 
-	// Parse query params
 	var afterID string
 	if val := r.URL.Query().Get("after"); val != "" {
 		afterID = val
@@ -162,7 +155,6 @@ func (h *HTTPHandler) HandleDeactivateUrl(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 1. JWT required, extract user_id & email
 	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "user not authenticated")

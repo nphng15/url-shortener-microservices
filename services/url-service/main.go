@@ -29,7 +29,7 @@ func main() {
 
 	log := logger.New(cfg.ServiceName)
 
-	// --- Database (fatal on failure) ---
+	// Database (fatal on failure)
 	dbCtx, dbCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer dbCancel()
 	pool, err := NewDBPool(dbCtx, cfg.DatabaseURL, log)
@@ -39,21 +39,21 @@ func main() {
 	}
 	defer pool.Close()
 
-	// --- Database Migration ---
+	// Database Migration
 	if _, err := pool.Exec(context.Background(), migrationSQL); err != nil {
 		log.Error("failed to run database migrations", "error", err)
 		os.Exit(1)
 	}
 	log.Info("database migrations applied successfully")
 
-	// --- Redis (non-fatal on failure) ---
+	// Redis
 	redisClient, redisOK := NewRedisClient(context.Background(), cfg.RedisURL, log)
 	defer redisClient.Close()
 	if !redisOK {
 		log.Warn("starting without Redis cache; cache will be unavailable until Redis recovers")
 	}
 
-	// --- RabbitMQ (fatal after max retries) ---
+	// RabbitMQ (fatal after max retries)
 	rmqCtx, rmqCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer rmqCancel()
 	rmqConn, err := NewRabbitMQConn(rmqCtx, cfg.RabbitMQURL, log, 10)
@@ -71,7 +71,7 @@ func main() {
 	cgen := NewShortCodeGenerator()
 	handler := NewHTTPHandler(pool, urlStore, outboxStore, cache, cgen, cfg.ShortURLBase)
 
-	// --- HTTP mux ---
+	// HTTP mux
 	authMw := auth.JWTMiddleware(cfg.JWTSecret)
 
 	mux := http.NewServeMux()
@@ -83,7 +83,6 @@ func main() {
 	mux.Handle("GET /urls", authMw(http.HandlerFunc(handler.HandleGetUrls)))
 	mux.Handle("DELETE /urls/{code}", authMw(http.HandlerFunc(handler.HandleDeactivateUrl)))
 
-	// --- HTTP Server ---
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      mux,
@@ -92,7 +91,6 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// --- Graceful shutdown ---
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 
