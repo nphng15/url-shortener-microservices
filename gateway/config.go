@@ -12,8 +12,17 @@ type Config struct {
 	NotificationServiceURL string
 	RedisURL               string
 	JWTSecret              string
+	ShortenRateLimit       RateLimitConfig
+	RedirectRateLimit      RateLimitConfig
+	CircuitBreaker         CircuitBreakerConfig
 	Port                   string
 	ServiceName            string
+}
+
+type CircuitBreakerConfig struct {
+	MaxFailures       int
+	OpenTimeoutSecs   int
+	FailureWindowSecs int
 }
 
 func loadConfig() (*Config, error) {
@@ -24,8 +33,15 @@ func loadConfig() (*Config, error) {
 		NotificationServiceURL: os.Getenv("NOTIFICATION_SERVICE_URL"),
 		RedisURL:               os.Getenv("REDIS_URL"),
 		JWTSecret:              os.Getenv("JWT_SECRET"),
-		Port:                   envOrDefault("PORT", "8080"),
-		ServiceName:            "gateway",
+		ShortenRateLimit:       RateLimitConfig{Limit: parseInt(envOrDefault("SHORTEN_RATE_LIMIT", "10"), 10), WindowSecs: 60},
+		RedirectRateLimit:      RateLimitConfig{Limit: parseInt(envOrDefault("REDIRECT_RATE_LIMIT", "300"), 300), WindowSecs: 60},
+		CircuitBreaker: CircuitBreakerConfig{
+			MaxFailures:       parseInt(envOrDefault("CB_MAX_FAILURES", "5"), 5),
+			OpenTimeoutSecs:   parseInt(envOrDefault("CB_OPEN_TIMEOUT_SECS", "30"), 30),
+			FailureWindowSecs: parseInt(envOrDefault("CB_FAILURE_WINDOW_SECS", "10"), 10),
+		},
+		Port:        envOrDefault("PORT", "8080"),
+		ServiceName: "gateway",
 	}
 
 	required := map[string]string{

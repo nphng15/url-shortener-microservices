@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -54,8 +57,29 @@ func (rl *RateLimiter) Allow(ctx context.Context, key string, limit int, windowS
 	return true, 0, nil
 }
 
+func (rl *RateLimiter) Close() error {
+	return rl.client.Close()
+}
+
 func rateLimitKey(routeKey, ip string) string {
 	return fmt.Sprintf("%s:%s", routeKey, ip)
+}
+
+func clientIP(r *http.Request) string {
+	if forwardedFor := r.Header.Get("X-Forwarded-For"); forwardedFor != "" {
+		ip := strings.TrimSpace(strings.Split(forwardedFor, ",")[0])
+		if ip != "" {
+			return ip
+		}
+	}
+	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+		return realIP
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 func parseInt(s string, def int) int {

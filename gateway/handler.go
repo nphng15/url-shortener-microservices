@@ -2,23 +2,31 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
-
-	"github.com/ikniz/url-shortener/shared/auth"
 )
 
 type Handler struct {
-	proxy  *Proxy
-	cfg    *Config
-	authMw func(http.Handler) http.Handler
+	proxy          *Proxy
+	cfg            *Config
+	rateLimiter    rateLimiter
+	circuitBreaker *CircuitBreaker
+	log            *slog.Logger
 }
 
-func NewHandler(proxy *Proxy, cfg *Config, authMw func(http.Handler) http.Handler) *Handler {
+type rateLimiter interface {
+	Allow(ctx context.Context, key string, limit int, windowSecs int) (bool, int, error)
+}
+
+func NewHandler(proxy *Proxy, cfg *Config, limiter rateLimiter, cb *CircuitBreaker, log *slog.Logger) *Handler {
 	return &Handler{
-		proxy:  proxy,
-		cfg:    cfg,
-		authMw: authMw,
+		proxy:          proxy,
+		cfg:            cfg,
+		rateLimiter:    limiter,
+		circuitBreaker: cb,
+		log:            log,
 	}
 }
 
@@ -29,16 +37,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if route.RequiresAuth {
-		_, ok := h.authCheck(w, r)
-		if !ok {
-			return
-		}
-	}
-
 	if route.RateLimitKey != "" {
 		allowed, retryAfter, err := h.checkRateLimit(r, route.RateLimitKey)
-		if err == nil && !allowed {
+		if err != nil {
+			h.log.Warn("rate limiter failed open", "route", route.RateLimitKey, "error", err)
+		} else if !allowed {
 			w.Header().Set("Retry-After", formatInt(retryAfter))
 			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
@@ -51,11 +54,37 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newReq := r.WithContext(context.WithValue(r.Context(), upstreamPathKey{}, upstreamPath))
+	if route.Upstream == "url-service" && h.circuitBreaker != nil {
+		if err := h.circuitBreaker.Do(r.Context(), func() error {
+			status, err := h.proxy.ServeHTTPStatus(w, newReq, route.Upstream)
+			if err != nil {
+				return err
+			}
+			if status >= http.StatusInternalServerError {
+				return fmt.Errorf("upstream returned %d", status)
+			}
+			return nil
+		}); err != nil {
+			if err == ErrCircuitOpen {
+				writeError(w, http.StatusServiceUnavailable, "url-service unavailable")
+			}
+			return
+		}
+		return
+	}
+
 	h.proxy.ServeHTTP(w, newReq, route.Upstream)
 }
 
 func (h *Handler) checkRateLimit(r *http.Request, key string) (bool, int, error) {
-	return true, 0, nil
+	if h.rateLimiter == nil {
+		return true, 0, nil
+	}
+	cfg := h.cfg.RedirectRateLimit
+	if key == "shorten" {
+		cfg = h.cfg.ShortenRateLimit
+	}
+	return h.rateLimiter.Allow(r.Context(), rateLimitKey(key, clientIP(r)), cfg.Limit, cfg.WindowSecs)
 }
 
 func formatInt(n int) string {
@@ -68,23 +97,4 @@ func formatInt(n int) string {
 		n /= 10
 	}
 	return s
-}
-
-func (h *Handler) authCheck(w http.ResponseWriter, r *http.Request) (*auth.Claims, bool) {
-	authHdr := r.Header.Get("Authorization")
-	if authHdr == "" || !strings.HasPrefix(authHdr, "Bearer ") {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return nil, false
-	}
-	token := strings.TrimPrefix(authHdr, "Bearer ")
-	if token == "" {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return nil, false
-	}
-	claims, err := auth.VerifyToken(token, h.cfg.JWTSecret)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return nil, false
-	}
-	return claims, true
 }

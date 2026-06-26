@@ -7,8 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/ikniz/url-shortener/shared/auth"
 	"github.com/ikniz/url-shortener/shared/logger"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -24,20 +24,32 @@ func main() {
 
 	upstreams := map[string]string{
 		"url-service":          cfg.URLServiceURL,
-		"analytics-service":   cfg.AnalyticsServiceURL,
-		"user-service":        cfg.UserServiceURL,
+		"analytics-service":    cfg.AnalyticsServiceURL,
+		"user-service":         cfg.UserServiceURL,
 		"notification-service": cfg.NotificationServiceURL,
 	}
 
 	proxy := NewProxy(upstreams)
-	authMw := auth.JWTMiddleware(cfg.JWTSecret)
+	limiter, err := NewRateLimiter(cfg.RedisURL)
+	if err != nil {
+		log.Error("rate limiter setup failed", "error", err)
+		os.Exit(1)
+	}
+	defer limiter.Close()
+	cb := NewCircuitBreaker(
+		cfg.CircuitBreaker.MaxFailures,
+		time.Duration(cfg.CircuitBreaker.OpenTimeoutSecs)*time.Second,
+		time.Duration(cfg.CircuitBreaker.FailureWindowSecs)*time.Second,
+	)
+	handler := NewHandler(proxy, cfg, limiter, cb, log)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", NewHealthHandler(cfg.ServiceName))
 	mux.Handle("GET /metrics", promhttp.Handler()) // Prometheus scrape endpoint
-	mux.Handle("/", NewHandler(proxy, cfg, authMw))
+	mux.Handle("/", jwtMiddleware(cfg.JWTSecret, handler))
 
-	srv := &http.Server{Addr: ":" + cfg.Port, Handler: mux}
+	app := logger.RequestLogger(log, correlationIDMiddleware(mux))
+	srv := &http.Server{Addr: ":" + cfg.Port, Handler: app}
 
 	go func() {
 		log.Info("server listening", "port", cfg.Port)

@@ -1,37 +1,32 @@
 package main
 
 import (
-	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"net/http"
-	"strings"
 
-	"github.com/ikniz/url-shortener/shared/auth"
+	"github.com/ikniz/url-shortener/shared/logger"
 )
 
-func authMiddleware(secret string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHdr := r.Header.Get("Authorization")
-			if authHdr == "" || !strings.HasPrefix(authHdr, "Bearer ") {
-				writeError(w, http.StatusUnauthorized, "unauthorized")
-				return
-			}
-			token := strings.TrimPrefix(authHdr, "Bearer ")
-			claims, err := auth.VerifyToken(token, secret)
-			if err != nil {
-				writeError(w, http.StatusUnauthorized, "unauthorized")
-				return
-			}
-			ctx := context.WithValue(r.Context(), auth.TestClaimsKey{}, claims)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
+const correlationIDHeader = "X-Correlation-ID"
+
+func correlationIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		correlationID := r.Header.Get(correlationIDHeader)
+		if correlationID == "" {
+			correlationID = newCorrelationID()
+			r.Header.Set(correlationIDHeader, correlationID)
+		}
+		w.Header().Set(correlationIDHeader, correlationID)
+		ctx := logger.ContextWithCorrelationID(r.Context(), correlationID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
-func extractBearerToken(r *http.Request) string {
-	authHdr := r.Header.Get("Authorization")
-	if authHdr == "" || !strings.HasPrefix(authHdr, "Bearer ") {
-		return ""
+func newCorrelationID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "unknown"
 	}
-	return strings.TrimPrefix(authHdr, "Bearer ")
+	return hex.EncodeToString(b[:])
 }

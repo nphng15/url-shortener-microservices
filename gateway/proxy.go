@@ -40,16 +40,24 @@ func NewProxy(upstreams map[string]string) *Proxy {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request, upstreamName string) {
+	_, _ = p.ServeHTTPStatus(w, r, upstreamName)
+}
+
+func (p *Proxy) ServeHTTPStatus(w http.ResponseWriter, r *http.Request, upstreamName string) (int, error) {
 	baseURL, ok := p.upstreams[upstreamName]
 	if !ok {
 		http.Error(w, "upstream not found", http.StatusBadGateway)
-		return
+		return http.StatusBadGateway, fmt.Errorf("upstream %q not found", upstreamName)
 	}
 
 	cb, hasCB := p.cbs[upstreamName]
 	if !hasCB {
-		p.doProxy(w, r, baseURL)
-		return
+		rec := newStatusRecorder(w)
+		status, err := p.doProxy(rec, r, baseURL)
+		if err != nil {
+			return status, err
+		}
+		return status, nil
 	}
 
 	start := time.Now()
@@ -58,19 +66,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request, upstreamName s
 	err := cb.Do(ctx, func() error {
 		// Use a custom ResponseWriter to capture the status code.
 		rec := newStatusRecorder(w)
-		p.doProxy(rec, r, baseURL)
+		status, proxyErr := p.doProxy(rec, r, baseURL)
+		if proxyErr != nil {
+			return proxyErr
+		}
 
 		elapsed := time.Since(start).Seconds()
 		requestDuration.WithLabelValues(upstreamName).Observe(elapsed)
 
 		// Treat 5xx as upstream errors so the CB counts them.
-		if rec.status >= 500 {
-			class := fmt.Sprintf("%dxx", rec.status/100)
+		if status >= 500 {
+			class := fmt.Sprintf("%dxx", status/100)
 			requestsTotal.WithLabelValues(upstreamName, class).Inc()
-			return fmt.Errorf("upstream %s returned %d", upstreamName, rec.status)
+			return fmt.Errorf("upstream %s returned %d", upstreamName, status)
 		}
 
-		class := fmt.Sprintf("%dxx", rec.status/100)
+		class := fmt.Sprintf("%dxx", status/100)
 		requestsTotal.WithLabelValues(upstreamName, class).Inc()
 		return nil
 	})
@@ -79,12 +90,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request, upstreamName s
 		recordCBRejected(upstreamName)
 		requestsTotal.WithLabelValues(upstreamName, "circuit_open").Inc()
 		http.Error(w, "service temporarily unavailable (circuit open)", http.StatusServiceUnavailable)
+		return http.StatusServiceUnavailable, err
+	}
+	if err != nil {
+		return http.StatusBadGateway, err
 	}
 	// Other errors: response was already written by doProxy.
+	return http.StatusOK, nil
 }
 
 // doProxy performs the actual reverse-proxy hop.
-func (p *Proxy) doProxy(w http.ResponseWriter, r *http.Request, baseURL string) {
+func (p *Proxy) doProxy(w http.ResponseWriter, r *http.Request, baseURL string) (int, error) {
 	upstreamPath := r.URL.Path
 	if v := r.Context().Value(upstreamPathKey{}); v != nil {
 		if s, ok := v.(string); ok {
@@ -117,8 +133,17 @@ func (p *Proxy) doProxy(w http.ResponseWriter, r *http.Request, baseURL string) 
 		out.Header.Set("X-Real-IP", host)
 	}
 
-	proxy := &httputil.ReverseProxy{Director: director}
-	proxy.ServeHTTP(w, r)
+	var proxyErr error
+	proxy := &httputil.ReverseProxy{
+		Director: director,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			proxyErr = err
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+		},
+	}
+	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	proxy.ServeHTTP(recorder, r)
+	return recorder.status, proxyErr
 }
 
 // SetUpstreamPath stores a rewritten path into the context.

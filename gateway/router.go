@@ -26,7 +26,6 @@ var routingTable = []Route{
 	{Method: "GET", PathPrefix: "/api/notifications", Upstream: "notification-service", RequiresAuth: true, StripPrefix: "/api"},
 }
 
-
 func matchRoute(r *http.Request) *Route {
 	for i := range routingTable {
 		rt := &routingTable[i]
